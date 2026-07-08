@@ -1,0 +1,32 @@
+# === Gerçek gizli bilgiler — ASLA commit'lenmesin ===
+# Uygulama secret'ları buradan okur (local_secrets.py). Bu dosya repoda YOK, olmamalı.
+.streamlit/secrets.toml
+**/.streamlit/secrets.toml
+secrets.toml
+.env
+.env.*
+TOKEN.py
+secrets.py
+
+# === Veri dosyaları (müşteri yorumları / DB — gizlilik + boyut) ===
+*.db
+*.sqlite
+*.sqlite3
+google_yorumlari.csv
+*.xlsx
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*.pyo
+*.class
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# === IDE / OS ===
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
