@@ -7,6 +7,11 @@ secrets.toml
 .env.*
 TOKEN.py
 secrets.py
+*.pem
+*.key
+credentials.json
+token.json
+# Not: *.example / *.example.toml dosyaları placeholder içerir, commit edilebilir.
 
 # === Veri dosyaları (müşteri yorumları / DB — gizlilik + boyut) ===
 *.db

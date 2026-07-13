@@ -1,6 +1,16 @@
+# =====================================================================
+# Google/TripAdvisor Yorum Analizi - Streamlit Community Cloud
+# Hedef Python: 3.12  (Streamlit Cloud > Advanced settings > Python 3.12)
+#
+# Tum surumler Python 3.12 icin onceden derlenmis (manylinux cp312)
+# wheel'lere sahiptir; boylece kaynaktan derleme yapilmaz ve
+# segmentation fault riski ortadan kalkar. Yalnizca main.py ve
+# local_secrets.py tarafindan DOGRUDAN import edilen ucuncu taraf
+# paketler sabitlenmistir.
+# =====================================================================
 streamlit==1.56.0
-pandas
-numpy
-requests
-xlsxwriter
-openpyxl
+pandas==2.2.3
+numpy==2.2.6
+requests==2.32.4
+xlsxwriter==3.2.5
+openpyxl==3.1.5
