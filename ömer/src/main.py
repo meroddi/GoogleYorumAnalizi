@@ -3,7 +3,68 @@ import time
 import hmac
 import hashlib
 import sqlite3
+import os
+import sys
+import logging
+import faulthandler
 from local_secrets import get_secret
+
+# ==========================================
+# 0.0 ÇÖKME TEŞHİSİ (faulthandler) + LOGLAMA
+# ==========================================
+# Segmentation fault / native çökme anında TÜM thread'lerin C-seviyesi
+# traceback'ini stderr'e (Streamlit Cloud loglarına) yazar.
+# Secret veya kullanıcı/yorum verisi ASLA loglanmaz.
+try:
+    faulthandler.enable(all_threads=True)
+except Exception:
+    pass
+
+logger = logging.getLogger("yorumanaliz")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    _log_handler = logging.StreamHandler(sys.stderr)
+    _log_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s [%(threadName)s] %(message)s")
+    )
+    logger.addHandler(_log_handler)
+logger.propagate = False
+
+
+def _process_rss_mb():
+    """Süreç RSS bellek kullanımı (MB). Yalnızca stdlib; secret/kullanıcı verisi içermez."""
+    try:
+        with open("/proc/self/status", "r") as fh:  # Linux (Streamlit Cloud)
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    return float(line.split()[1]) / 1024.0  # kB -> MB
+    except Exception:
+        pass
+    try:
+        import resource  # Unix yedek
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+    except Exception:
+        return None
+
+
+def _log_mem(stage: str, df=None):
+    """Bellek kullanımını güvenli şekilde loglar: aşama adı + süreç RSS + (varsa) df satır/bellek.
+    Secret, parola, token veya yorum metni ASLA loglanmaz."""
+    try:
+        parts = ["[MEM] " + str(stage)]
+        rss = _process_rss_mb()
+        if rss is not None:
+            parts.append("process_rss=%.1fMB" % rss)
+        if df is not None:
+            try:
+                parts.append("df_rows=%d" % len(df))
+                parts.append("df_mem=%.1fMB" % (df.memory_usage(deep=True).sum() / 1e6))
+            except Exception:
+                pass
+        logger.info(" ".join(parts))
+    except Exception:
+        pass
+
 
 # ==========================================
 # 0. GİRİŞ SİSTEMİ (her şeyden önce çalışır)
@@ -27,7 +88,7 @@ if not st.session_state.logged_in:
     st.set_page_config(page_title="Giriş", page_icon="🔒", layout="centered")
     st.title("🔒 Yönetici Girişi")
     password = st.text_input("Şifre", type="password")
-    if st.button("Giriş Yap", use_container_width=True):
+    if st.button("Giriş Yap", width="stretch"):
         if not APP_PASSWORD_HASH:
             st.error("APP_PASSWORD_HASH bulunamadi. .streamlit/secrets.toml dosyasini kontrol edin.")
         elif hmac.compare_digest(sha256(password), APP_PASSWORD_HASH):
@@ -53,6 +114,7 @@ from typing import Dict, List, Optional, Tuple
 import os
 
 st.set_page_config(page_title="Google Yorum Analizi", page_icon="📊", layout="wide")
+_log_mem("app_start")
 
 # ==========================================
 # PLACES API
@@ -138,6 +200,34 @@ def render_title_with_logo(title: str, *logo_names: str) -> None:
     with right_col:
         if logo_path:
             st.image(logo_path, width=60)
+
+
+def render_df_paginated(df: pd.DataFrame, key: str, page_size: int = 250, **kwargs):
+    """Büyük tabloları sayfalayarak render eder. Varsayılan olarak yalnızca
+    ilk 250 satır render edilir; kullanıcı sayfa seçerek gezinir.
+    Bu, her rerun'da tüm DataFrame'in Arrow'a serialize edilmesini önleyerek
+    bellek baskısını ve çökme riskini azaltır."""
+    if df is None:
+        return
+    n = len(df)
+    if n <= page_size:
+        st.dataframe(df, **kwargs)
+        return
+    _log_mem("table_render:" + str(key), df)
+    total_pages = (n + page_size - 1) // page_size
+    c1, c2 = st.columns([1, 3])
+    with c1:
+        page = st.number_input(
+            "Sayfa", min_value=1, max_value=int(total_pages), value=1, step=1, key=f"{key}_page"
+        )
+    start = (int(page) - 1) * page_size
+    end = min(start + page_size, n)
+    with c2:
+        st.caption(
+            f"{n:,} satırın {start + 1:,}–{end:,} arası gösteriliyor "
+            f"(sayfa {int(page)}/{total_pages}, sayfa başına {page_size})"
+        )
+    st.dataframe(df.iloc[start:end], **kwargs)
 
 def db_init():
     con = sqlite3.connect(DB_PATH)
@@ -620,7 +710,7 @@ CLIENT_SECRET = get_secret("OAUTH_CLIENT_SECRET", __file__)
 REFRESH_TOKEN = get_secret("OAUTH_REFRESH_TOKEN", __file__)
 
 with st.sidebar:
-    if st.button("🚪 Çıkış Yap", use_container_width=True):
+    if st.button("🚪 Çıkış Yap", width="stretch"):
         st.session_state.clear()
         st.rerun()
 
@@ -696,17 +786,19 @@ def list_locations(access_token: str, account_name: str, page_size: int = 100) -
     return all_locs
 
 
-def yorumlari_getir_business_api(account_name: str, location_name: str, access_token: str) -> pd.DataFrame:
+def yorumlari_getir_business_api(account_name: str, location_name: str, access_token: str):
+    """WORKER-SAFE: Bu fonksiyon ThreadPoolExecutor worker thread'lerinde de çalışır;
+    bu yüzden hiçbir st.* / st.sidebar.* / st.session_state çağrısı YAPMAZ.
+    Yalnızca HTTP isteği + veri işleme yapar. UI güncellemesi ana thread'e bırakılır.
+    Dönüş: (pd.DataFrame, List[str] uyarı mesajları)."""
     all_reviews: List[Dict] = []
     page_token = None
     base_url = f"https://mybusiness.googleapis.com/v4/{account_name}/{location_name}/reviews"
-    status_text = st.sidebar.empty()
-    bar = st.sidebar.progress(0)
     sayfa = 0
     max_retries = 5
+    warnings_out: List[str] = []
 
     while True:
-        status_text.text(f"Veriler çekiliyor... Sayfa: {sayfa + 1} | Toplam: {len(all_reviews)}")
         params = {"pageSize": 50}
         if page_token:
             params["pageToken"] = page_token
@@ -724,7 +816,6 @@ def yorumlari_getir_business_api(account_name: str, location_name: str, access_t
                     last_err = f"HTTP {r.status_code}: {err_json}"
                     if r.status_code in (429, 500, 503):
                         wait = 2.0 * (attempt + 1)
-                        status_text.text(f"⏳ Rate limit, {wait:.0f}s bekleniyor... ({attempt+1}/{max_retries})")
                         time.sleep(wait)
                         continue
                     else:
@@ -738,7 +829,6 @@ def yorumlari_getir_business_api(account_name: str, location_name: str, access_t
                 all_reviews.extend(new_reviews)
                 page_token = resp.get("nextPageToken")
                 sayfa += 1
-                bar.progress(min(sayfa * 5, 90))
                 success = True
                 break
             except requests.exceptions.Timeout:
@@ -749,14 +839,14 @@ def yorumlari_getir_business_api(account_name: str, location_name: str, access_t
                 time.sleep(1.5 * (attempt + 1))
 
         if not success:
-            st.sidebar.warning(f"⚠️ Sayfa {sayfa+1} alınamadı ({max_retries} deneme). Toplam {len(all_reviews)} yorum.\nHata: {last_err}")
+            warnings_out.append(
+                f"⚠️ {location_name}: sayfa {sayfa+1} alınamadı ({max_retries} deneme). "
+                f"Toplam {len(all_reviews)} yorum. Hata: {last_err}"
+            )
             break
         if not page_token:
             break
         time.sleep(0.8)
-
-    bar.empty()
-    status_text.success(f"✅ {len(all_reviews)} yorum çekildi.")
 
     star_map = {"STAR_RATING_UNSPECIFIED": 0, "ONE": 1, "TWO": 2, "THREE": 3, "FOUR": 4, "FIVE": 5}
     processed = []
@@ -767,7 +857,7 @@ def yorumlari_getir_business_api(account_name: str, location_name: str, access_t
             "review_text": r.get("comment", ""),
             "review_datetime_utc": r.get("createTime", ""),
         })
-    return pd.DataFrame(processed)
+    return pd.DataFrame(processed), warnings_out
 
 
 def fetch_reviews_for_locations(access_token, account_name, locations, parallel=False):
@@ -782,30 +872,35 @@ def fetch_reviews_for_locations(access_token, account_name, locations, parallel=
     if not loc_items:
         return pd.DataFrame()
 
+    # UI öğeleri yalnızca ANA thread'de oluşturulur ve güncellenir.
     sidebar_status = st.sidebar.empty()
     sidebar_bar    = st.sidebar.progress(0)
     results = []
+    all_warnings: List[str] = []
 
     def _one(loc_name, title, store_code, place_id):
-        df_loc = yorumlari_getir_business_api(account_name, loc_name, access_token)
+        # WORKER-SAFE: burada hiçbir st.* çağrısı yok; yalnızca veri döner.
+        df_loc, warns = yorumlari_getir_business_api(account_name, loc_name, access_token)
         if not df_loc.empty:
             df_loc.insert(0, "location_title", title)
             df_loc.insert(1, "location_name", loc_name)
             df_loc.insert(2, "store_code", store_code)
             df_loc.insert(3, "place_id", place_id)
-        return df_loc
+        return df_loc, warns
 
     if parallel and len(loc_items) > 1:
         max_workers = min(5, len(loc_items))
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
             futs = {ex.submit(_one, a, b, c, d): (a, b) for a, b, c, d in loc_items}
             done = 0
-            for fut in concurrent.futures.as_completed(futs):
+            for fut in concurrent.futures.as_completed(futs):  # ana thread
                 done += 1
                 sidebar_status.text(f"Yorumlar çekiliyor: {done}/{len(loc_items)}")
                 sidebar_bar.progress(int(done / len(loc_items) * 100))
                 try:
-                    results.append(fut.result())
+                    df_loc, warns = fut.result()
+                    results.append(df_loc)
+                    all_warnings.extend(warns)
                 except Exception:
                     pass
     else:
@@ -813,13 +908,18 @@ def fetch_reviews_for_locations(access_token, account_name, locations, parallel=
             sidebar_status.text(f"Yorumlar çekiliyor: {i}/{len(loc_items)}")
             sidebar_bar.progress(int(i / len(loc_items) * 100))
             try:
-                results.append(_one(loc_name, title, store_code, place_id))
+                df_loc, warns = _one(loc_name, title, store_code, place_id)
+                results.append(df_loc)
+                all_warnings.extend(warns)
                 time.sleep(0.05)
             except Exception:
                 pass
 
     sidebar_bar.empty()
     sidebar_status.empty()
+    # Uyarılar da ana thread'de gösterilir (worker'larda değil).
+    for w in all_warnings:
+        st.sidebar.warning(w)
     if not results:
         return pd.DataFrame()
     return pd.concat(results, ignore_index=True)
@@ -1290,58 +1390,68 @@ def ta_analiz_goster(df: pd.DataFrame):
 
     puan_tablosu, ham_veri = analiz_et(df, zaman_modu, date_range=date_range)
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📄 Puan Tablosu",
-        "🚨 Şikayet Detayları",
-        "🔁 Tekrar Eden Şikayetler",
-        "⭐ En İyi Yorumlar",
-        "📋 Veri Listesi"
-    ])
+    _log_mem("ta_analiz", ham_veri)
 
-    with tab1:
+    view = st.segmented_control(
+        "Görünüm",
+        ["📄 Puan Tablosu", "🚨 Şikayet Detayları", "🔁 Tekrar Eden Şikayetler", "⭐ En İyi Yorumlar", "📋 Veri Listesi"],
+        default="📄 Puan Tablosu",
+        key="ta_view_nav",
+        label_visibility="collapsed",
+    )
+    if view is None:
+        view = "📄 Puan Tablosu"
+
+    # Yalnızca seçilen görünüm hesaplanır/render edilir (tüm sekmeler her rerun'da değil).
+    if view == "📄 Puan Tablosu":
         render_title_with_logo(
             f"📄 {zaman_modu} Puan Dağılım Tablosu",
             "tripadvisor-logo-cropped.png",
             "tripadvisor-logo.png",
         )
-        st.dataframe(puan_tablosu, use_container_width=True)
+        st.dataframe(puan_tablosu, width="stretch")
 
-    with tab2:
+    elif view == "🚨 Şikayet Detayları":
         st.subheader("Dönemsel Şikayet Listesi (≤ 3 Yıldız)")
         sikayet_df = ham_veri[ham_veri["review_rating"] <= 3].copy()
         if not sikayet_df.empty:
             cols = [c for c in ["Zaman", "author_title", "review_rating", "review_text", "title", "tripType"] if c in sikayet_df.columns]
-            st.dataframe(sikayet_df[cols], use_container_width=True, hide_index=True)
+            render_df_paginated(sikayet_df[cols], key="ta_sikayet", width="stretch", hide_index=True)
         else:
             st.success("Bu dönemde şikayet bulunamadı.")
 
-    with tab3:
+    elif view == "🔁 Tekrar Eden Şikayetler":
         st.subheader("Tekrar Eden Şikayet İfadeleri (Bigrams)")
         rep = tekrar_eden_sikayetler(ham_veri, top_n=12, min_count=3)
         if rep is None or rep.empty:
             st.info("Yeterli tekrar eden ifade bulunamadı (veya kötü yorum yok).")
         else:
-            st.dataframe(rep, use_container_width=True, hide_index=True)
+            st.dataframe(rep, width="stretch", hide_index=True)
 
-    with tab4:
+    elif view == "⭐ En İyi Yorumlar":
         st.subheader("Web Sitesi İçin Öne Çıkan 20 Yorum")
         en_iyi_df = en_iyi_yorumlari_sec(ham_veri, top_n=20)
         if en_iyi_df is None or en_iyi_df.empty:
             st.info("Yeterli nitelikli olumlu yorum bulunamadı.")
         else:
-            st.dataframe(en_iyi_df, use_container_width=True, hide_index=True)
+            st.dataframe(en_iyi_df, width="stretch", hide_index=True)
 
-    with tab5:
-        st.dataframe(ham_veri, use_container_width=True, hide_index=True)
+    else:  # "📋 Veri Listesi"
+        render_df_paginated(ham_veri, key="ta_veri", width="stretch", hide_index=True)
 
     st.divider()
-    excel_data = excel_indir(ham_veri, puan_tablosu)
-    st.download_button(
-        label="📥 TripAdvisor Raporunu İndir",
-        data=excel_data,
-        file_name="TripAdvisor_Analiz_Raporu.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    # Excel raporu her rerun'da değil, yalnızca butona basınca üretilir.
+    if st.button("📊 Raporu Hazırla (TripAdvisor)", key="ta_prep_report"):
+        with st.spinner("TripAdvisor raporu hazırlanıyor..."):
+            st.session_state["ta_excel_bytes"] = excel_indir(ham_veri, puan_tablosu)
+            _log_mem("excel_generation_ta", ham_veri)
+    if st.session_state.get("ta_excel_bytes"):
+        st.download_button(
+            label="📥 TripAdvisor Raporunu İndir",
+            data=st.session_state["ta_excel_bytes"],
+            file_name="TripAdvisor_Analiz_Raporu.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
 
 def excel_indir(df: pd.DataFrame, puan_tablosu: pd.DataFrame) -> bytes:
@@ -1372,9 +1482,20 @@ def excel_indir(df: pd.DataFrame, puan_tablosu: pd.DataFrame) -> bytes:
 # ==========================================
 st.title("📊 Yorum Analiz Paneli")
 
-google_tab, tripadvisor_tab = st.tabs(["🔵 Google Yorumları", "🟡 TripAdvisor Yorumları"])
+# st.tabs yerine koşullu navigasyon: st.tabs HER İKİ platformun içeriğini de
+# her rerun'da hesaplar; bu bellek baskısını artırır. segmented_control ile
+# YALNIZCA seçilen platform ve analiz ekranı hesaplanır/render edilir.
+platform = st.segmented_control(
+    "Platform",
+    ["🔵 Google Yorumları", "🟡 TripAdvisor Yorumları"],
+    default="🔵 Google Yorumları",
+    key="platform_nav",
+    label_visibility="collapsed",
+)
+if platform is None:
+    platform = "🔵 Google Yorumları"
 
-with tripadvisor_tab:
+if platform == "🟡 TripAdvisor Yorumları":
     st.markdown("### TripAdvisor Yorum Analizi")
     st.caption("TripAdvisor verileri veritabanından okunur. Yeni bir Excel/CSV dosyası eklemek isterseniz önce seçip sonra DB'ye kaydedin.")
 
@@ -1392,12 +1513,12 @@ with tripadvisor_tab:
     with col_ta2:
         st.write("")
         st.write("")
-        ta_kaydet = st.button("💾 Trip DB'ye Kaydet", use_container_width=True, key="ta_save_db")
+        ta_kaydet = st.button("💾 Trip DB'ye Kaydet", width="stretch", key="ta_save_db")
 
     with col_ta3:
         st.write("")
         st.write("")
-        ta_temizle = st.button("🗑️ Trip DB Temizle", use_container_width=True, key="ta_clear_db")
+        ta_temizle = st.button("🗑️ Trip DB Temizle", width="stretch", key="ta_clear_db")
 
     if ta_temizle:
         db_tripadvisor_sil()
@@ -1422,7 +1543,7 @@ with tripadvisor_tab:
     else:
         st.info("📂 Veritabanında TripAdvisor verisi yok. Dosya seçip 'Trip DB'ye Kaydet' butonunu kullanın.")
 
-with google_tab:
+elif platform == "🔵 Google Yorumları":
     if "data_loaded_at" in st.session_state and st.session_state.data_loaded_at:
         loaded_at = st.session_state.data_loaded_at
         gecen_dk  = int((datetime.now() - loaded_at).total_seconds() / 60)
@@ -1456,10 +1577,11 @@ with google_tab:
         st.sidebar.markdown('<div class="sb-title">② Veri Kaynağı</div>', unsafe_allow_html=True)
 
         if mod == "Demo Modu":
-            if st.sidebar.button("🚀 Demo Verileri Yükle", use_container_width=True):
+            if st.sidebar.button("🚀 Demo Verileri Yükle", width="stretch"):
                 raw_df = demo_veri_uret()
                 st.session_state.data_frame = raw_df
                 st.session_state.data_loaded_at = datetime.now()
+                _log_mem("data_load_demo", raw_df)
                 st.sidebar.success("✅ Demo verileri yüklendi!")
                 st.rerun()
         else:
@@ -1530,7 +1652,7 @@ with google_tab:
             st.sidebar.markdown('<div class="sb-card">', unsafe_allow_html=True)
             st.sidebar.markdown('<div class="sb-title">🚀 İşlem</div>', unsafe_allow_html=True)
 
-            veri_cek = st.sidebar.button("🌍 VERİLERİ ÇEK", use_container_width=True)
+            veri_cek = st.sidebar.button("🌍 VERİLERİ ÇEK", width="stretch")
 
             if veri_cek:
                 if not access_token:
@@ -1546,6 +1668,7 @@ with google_tab:
                         birlesik = api_ile_birlestir(raw_df)
                         st.session_state.data_frame = birlesik
                         st.session_state.data_loaded_at = datetime.now()
+                        _log_mem("data_load_api", birlesik)
                         os_adet = db_outscraper_adet()
                         if os_adet > 0:
                             st.sidebar.success(f"✅ {len(raw_df)} API + {os_adet} DB = {len(birlesik)} toplam")
@@ -1586,10 +1709,10 @@ with google_tab:
 
         c1, c2 = st.sidebar.columns(2)
         with c1:
-            if st.sidebar.button("🔄 Yenile", use_container_width=True):
+            if st.sidebar.button("🔄 Yenile", width="stretch"):
                 st.rerun()
         with c2:
-            if st.sidebar.button("🧹 Veriyi Sıfırla", use_container_width=True):
+            if st.sidebar.button("🧹 Veriyi Sıfırla", width="stretch"):
                 st.session_state.data_frame = None
                 st.rerun()
 
@@ -1603,7 +1726,7 @@ with google_tab:
 
         os_file = st.sidebar.file_uploader("Excel veya CSV yükle", type=["csv", "xlsx", "xls"], key="os_uploader")
         if os_file:
-            if st.sidebar.button("💾 DB'ye Kaydet", use_container_width=True):
+            if st.sidebar.button("💾 DB'ye Kaydet", width="stretch"):
                 with st.spinner("İşleniyor..."):
                     os_df = dosya_isle(os_file)
                     if not os_df.empty:
@@ -1617,7 +1740,7 @@ with google_tab:
                         st.sidebar.error("Dosya işlenemedi.")
 
         if os_adet > 0:
-            if st.sidebar.button("🗑️ DB'yi Temizle", use_container_width=True, type="secondary"):
+            if st.sidebar.button("🗑️ DB'yi Temizle", width="stretch", type="secondary"):
                 db_outscraper_sil()
                 st.sidebar.success("DB temizlendi.")
                 st.rerun()
@@ -1782,40 +1905,45 @@ with google_tab:
 
         puan_tablosu, ham_veri = analiz_et(df, zaman_modu, date_range=date_range)
 
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
-            "📄 Puan Tablosu",
-            "🚨 Şikayet Detayları",
-            "🔁 Tekrar Eden Şikayetler",
-            "⭐ En İyi Yorumlar",
-            "📋 Veri Listesi"
-        ])
+        _log_mem("google_analiz", ham_veri)
 
-        with tab1:
+        view = st.segmented_control(
+            "Görünüm",
+            ["📄 Puan Tablosu", "🚨 Şikayet Detayları", "🔁 Tekrar Eden Şikayetler", "⭐ En İyi Yorumlar", "📋 Veri Listesi"],
+            default="📄 Puan Tablosu",
+            key="google_view_nav",
+            label_visibility="collapsed",
+        )
+        if view is None:
+            view = "📄 Puan Tablosu"
+
+        # Yalnızca seçilen görünüm hesaplanır/render edilir (tüm sekmeler her rerun'da değil).
+        if view == "📄 Puan Tablosu":
             render_title_with_logo(
                 f"📄 {zaman_modu} Puan Dağılım Tablosu",
                 "google-logo-cropped.png",
                 "google-logo.png",
             )
-            st.dataframe(puan_tablosu, use_container_width=True)
+            st.dataframe(puan_tablosu, width="stretch")
 
-        with tab2:
+        elif view == "🚨 Şikayet Detayları":
             st.subheader("Dönemsel Şikayet Listesi (≤ 3 Yıldız)")
             sikayet_df = ham_veri[ham_veri["review_rating"] <= 3].copy()
             if not sikayet_df.empty:
                 cols = [c for c in ["Zaman", "author_title", "review_rating", "review_text"] if c in sikayet_df.columns]
-                st.dataframe(sikayet_df[cols], use_container_width=True, hide_index=True)
+                render_df_paginated(sikayet_df[cols], key="google_sikayet", width="stretch", hide_index=True)
             else:
                 st.success("Bu dönemde şikayet bulunamadı.")
 
-        with tab3:
+        elif view == "🔁 Tekrar Eden Şikayetler":
             st.subheader("Tekrar Eden Şikayet İfadeleri (Bigrams)")
             rep = tekrar_eden_sikayetler(ham_veri, top_n=12, min_count=3)
             if rep is None or rep.empty:
                 st.info("Yeterli tekrar eden ifade bulunamadı (veya kötü yorum yok).")
             else:
-                st.dataframe(rep, use_container_width=True, hide_index=True)
+                st.dataframe(rep, width="stretch", hide_index=True)
 
-        with tab4:
+        elif view == "⭐ En İyi Yorumlar":
             st.subheader("Web Sitesi İçin Öne Çıkan 20 Yorum")
             st.caption("Seçimde 5 yıldız önceliği, yorumun güncelliği, metnin açıklayıcı olması ve tekrar etmeme kriterleri kullanılır.")
             en_iyi_df = en_iyi_yorumlari_sec(ham_veri, top_n=20)
@@ -1824,7 +1952,7 @@ with google_tab:
             else:
                 st.dataframe(
                     en_iyi_df.drop(columns=["Skor"]),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                     column_config={
                         "Yorum": st.column_config.TextColumn("Yorum", width="large"),
@@ -1832,14 +1960,19 @@ with google_tab:
                     }
                 )
 
-        with tab5:
-            st.dataframe(ham_veri, use_container_width=True)
+        else:  # "📋 Veri Listesi"
+            render_df_paginated(ham_veri, key="google_veri", width="stretch")
 
         st.divider()
-        excel_data = excel_indir(ham_veri, puan_tablosu)
-        st.download_button(
-            label="📥 Raporu Excel Olarak İndir",
-            data=excel_data,
-            file_name="Rapor.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        # Excel raporu her rerun'da değil, yalnızca butona basınca üretilir.
+        if st.button("📊 Raporu Hazırla (Google)", key="google_prep_report"):
+            with st.spinner("Rapor hazırlanıyor..."):
+                st.session_state["google_excel_bytes"] = excel_indir(ham_veri, puan_tablosu)
+                _log_mem("excel_generation_google", ham_veri)
+        if st.session_state.get("google_excel_bytes"):
+            st.download_button(
+                label="📥 Raporu Excel Olarak İndir",
+                data=st.session_state["google_excel_bytes"],
+                file_name="Rapor.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )

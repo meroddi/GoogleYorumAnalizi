@@ -14,3 +14,7 @@ numpy==2.2.6
 requests==2.32.4
 xlsxwriter==3.2.5
 openpyxl==3.1.5
+# pyarrow: Streamlit st.dataframe verisini Arrow'a serialize eder. Native (C++)
+# cokme riskini deterministik tutmak icin transitif birakmak yerine, stres-testli
+# ve muhafazakar 18.1.0 dogrudan sabitlendi (streamlit>=7.0, pandas>=10.0.1 uyumlu).
+pyarrow==18.1.0
