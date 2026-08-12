@@ -33,11 +33,23 @@ Yeni kayıtları ilgili başlığın altına, **en yeni üstte** olacak şekilde
 
 ## Unity / Oyun
 
-*(Henüz kayıt yok — ilk Unity sorununda buraya yazılacak.)*
+### Unity Hub'da "LTS" etiketi görünmüyor — hangi sürümü seçmeli?
+- **Belirti:** Hub → Install Editor listesinde sürümlerin yanında "LTS" yazmıyor,
+  hangisinin uzun destekli olduğu anlaşılmıyor.
+- **Sebep:** Hub yeni sürümlerde LTS etiketini her satırda göstermiyor; bazen
+  sadece "Recommended" rozeti koyuyor, bazen hiç rozet olmuyor.
+- **Çözüm:** Etikete değil **sürüm numarasına** bak. Eşleme:
+  `6000.0.x` = Unity 6.0 · `6000.1.x` = 6.1 · `6000.2.x` = 6.2 · `6000.3.x` = 6.3.
+  **Official Releases** sekmesinde kal, **`6000.3.` ile başlayan en güncel**
+  sürümü seç (Unity 6.3 LTS). "Recommended" rozeti varsa doğrudan onu seç.
+- **Dikkat:** Unity 6.0 LTS desteği **Ekim 2026**'da bitiyor — yeni projede seçme.
+  Unity 6.3 LTS **Aralık 2027**'ye kadar destekli.
+- **Kaynak:** unity.com/releases/unity-6/support
+- **Son doğrulama:** 2026-08-12
 
-Beklenen alanlar: URP mobil profili, IL2CPP + ARM64 build, Android SDK/NDK
+*Beklenen diğer alanlar: URP mobil profili, IL2CPP + ARM64 build, Android SDK/NDK
 sürüm uyumu, Addressables, ink entegrasyonu, Mixamo rig/animasyon aktarımı,
-Asset Store paketlerinin mobil uyumu.
+Asset Store paketlerinin mobil uyumu.*
 
 ---
 

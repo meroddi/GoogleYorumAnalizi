@@ -19,7 +19,15 @@ bilmek gerekir — hareket kötüyse hiçbir model onu kurtarmaz.
 
 ### 1.2 Editörü kur
 1. Hub → sol menü **Installs** → **Install Editor**.
-2. Listede **LTS** etiketli en güncel sürümü seç (Unity 6 / 6000.x hattı).
+2. **Official Releases** sekmesinde kal → sürüm numarası **`6000.3.` ile başlayan
+   en güncel** olanı seç (= **Unity 6.3 LTS**, Aralık 2027'ye kadar destekli).
+
+   > **"LTS" yazısını göremiyorsan normal** — Hub bu etiketi her satırda
+   > göstermiyor. Etikete değil sürüm numarasına bak:
+   > `6000.0.x`=6.0 · `6000.1.x`=6.1 · `6000.2.x`=6.2 · `6000.3.x`=6.3.
+   > **"Recommended" rozeti** varsa doğrudan onu seç.
+   >
+   > ⚠️ **`6000.0.x` (Unity 6.0 LTS) seçme** — desteği Ekim 2026'da bitiyor.
 3. **Add modules** ekranında şu üçünü işaretle — *sonradan eklemek zahmetli:*
    - ☑ **Android Build Support**
    - ☑ └ **OpenJDK**
