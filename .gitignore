@@ -35,3 +35,7 @@ env/
 .idea/
 .DS_Store
 Thumbs.db
+
+# === Java / Maven ===
+target/
+*.jar
