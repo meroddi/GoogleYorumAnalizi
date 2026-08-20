@@ -21,8 +21,9 @@ namespace Bagisik.EditorTools
         private static readonly Color ShadowMid   = Hex("#2A3742");
         private static readonly Color ShadowLight = Hex("#38454E");
         private static readonly Color NeutralWarm = Hex("#4A4A44");
-        private static readonly Color KeyDusk     = Hex("#E8A24C");
+        private static readonly Color KeyDusk     = Hex("#E8A24C"); // gündüz/alacakaranlık sahneleri için
         private static readonly Color Sodium      = Hex("#FFA24A");
+        private static readonly Color Moonlight   = Hex("#8FA8C4");
         private static readonly Color FogColor    = Hex("#1C2228");
 
         private const string SettingsDir = "Assets/Settings";
@@ -71,10 +72,12 @@ namespace Bagisik.EditorTools
             // Gökyüzü yerine düz koyu bir zemin: sis zaten mesafeyi yutuyor,
             // ve skybox'ın parlak gradyanı paleti bozuyor.
             RenderSettings.skybox = null;
+            // Gölgeler siyaha kırpılmayacak: karanlığın içinde hâlâ okunacak
+            // detay kalmalı (anayasa §1, kural 2). Ortam ışığı bunun sigortası.
             RenderSettings.ambientMode = AmbientMode.Trilight;
-            RenderSettings.ambientSkyColor = ShadowLight * 0.55f;
-            RenderSettings.ambientEquatorColor = ShadowMid * 0.5f;
-            RenderSettings.ambientGroundColor = ShadowDeep * 0.4f;
+            RenderSettings.ambientSkyColor = ShadowLight * 1.15f;
+            RenderSettings.ambientEquatorColor = ShadowMid * 1.0f;
+            RenderSettings.ambientGroundColor = ShadowDeep * 0.85f;
 
             // Sis her sahnede açık; rengi sahnenin baskın ışığından örneklenir.
             RenderSettings.fog = true;
@@ -96,12 +99,14 @@ namespace Bagisik.EditorTools
             {
                 if (light.type != LightType.Directional) continue;
 
-                // Alçak, sıcak, batan güneş. Uzun gölgeler için alçak açı.
-                light.color = KeyDusk;
-                light.intensity = 0.85f;
-                light.transform.rotation = Quaternion.Euler(14f, 35f, 0f);
+                // AY IŞIĞI — key değil, dolgu. Soğuk ve zayıf.
+                // Sahnenin gerçek key'i sodyum lambası; sıcak ada onun etrafında
+                // kurulsun diye bu ışık bilinçli olarak silik tutuluyor.
+                light.color = Moonlight;
+                light.intensity = 0.35f;
+                light.transform.rotation = Quaternion.Euler(38f, 150f, 0f);
                 light.shadows = LightShadows.Soft;
-                light.shadowStrength = 0.9f;
+                light.shadowStrength = 0.55f;
             }
         }
 
@@ -130,7 +135,7 @@ namespace Bagisik.EditorTools
             head.transform.localPosition = new Vector3(0f, 4.5f, 0f);
             head.transform.localScale = Vector3.one * 0.35f;
             head.GetComponent<MeshRenderer>().sharedMaterial =
-                GetOrCreateEmissive("Bagisik_Ampul", Sodium, 3.5f);
+                GetOrCreateEmissive("Bagisik_Ampul", Sodium, 1.4f);
 
             var lightGo = new GameObject("Isik");
             lightGo.transform.SetParent(root.transform, false);
@@ -139,8 +144,8 @@ namespace Bagisik.EditorTools
             var light = lightGo.AddComponent<Light>();
             light.type = LightType.Point;
             light.color = Sodium;
-            light.intensity = 12f;
-            light.range = 16f;
+            light.intensity = 26f;   // sahnenin key'i — sıcak adayı bu kurar
+            light.range = 22f;
             light.shadows = LightShadows.Soft;
         }
 
@@ -174,17 +179,17 @@ namespace Bagisik.EditorTools
             EnsureFolder(MaterialDir);
             string path = $"{MaterialDir}/{name}.mat";
 
-            var existing = AssetDatabase.LoadAssetAtPath<Material>(path);
-            if (existing != null) return existing;
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(path);
+            bool isNew = mat == null;
+            if (isNew) mat = new Material(Shader.Find("Universal Render Pipeline/Lit")) { name = name };
 
-            var shader = Shader.Find("Universal Render Pipeline/Lit");
-            var mat = new Material(shader) { name = name };
             mat.SetColor("_BaseColor", color);
             // Post-apokaliptik yüzeyler mat: parlaklık plastik görünümün baş sebebi.
             mat.SetFloat("_Smoothness", Mathf.Clamp01(1f - smoothnessInverse));
             mat.SetFloat("_Metallic", 0f);
 
-            AssetDatabase.CreateAsset(mat, path);
+            if (isNew) AssetDatabase.CreateAsset(mat, path);
+            else EditorUtility.SetDirty(mat);
             return mat;
         }
 
@@ -193,16 +198,17 @@ namespace Bagisik.EditorTools
             EnsureFolder(MaterialDir);
             string path = $"{MaterialDir}/{name}.mat";
 
-            var existing = AssetDatabase.LoadAssetAtPath<Material>(path);
-            if (existing != null) return existing;
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(path);
+            bool isNew = mat == null;
+            if (isNew) mat = new Material(Shader.Find("Universal Render Pipeline/Lit")) { name = name };
 
-            var mat = new Material(Shader.Find("Universal Render Pipeline/Lit")) { name = name };
             mat.SetColor("_BaseColor", color);
             mat.EnableKeyword("_EMISSION");
             mat.globalIlluminationFlags = MaterialGlobalIlluminationFlags.RealtimeEmissive;
             mat.SetColor("_EmissionColor", color * intensity);
 
-            AssetDatabase.CreateAsset(mat, path);
+            if (isNew) AssetDatabase.CreateAsset(mat, path);
+            else EditorUtility.SetDirty(mat);
             return mat;
         }
 
@@ -241,13 +247,13 @@ namespace Bagisik.EditorTools
 
             var smh = GetOrAdd<ShadowsMidtonesHighlights>(profile);
             smh.shadows.overrideState = true;
-            smh.shadows.value = new Vector4(0.85f, 0.95f, 1.15f, 0f);    // gölgeler maviye
+            smh.shadows.value = new Vector4(0.88f, 0.96f, 1.14f, 0.055f); // maviye + hafif kaldır
             smh.highlights.overrideState = true;
             smh.highlights.value = new Vector4(1.1f, 1.02f, 0.9f, 0f);   // ışıklar sıcağa
 
             var vignette = GetOrAdd<Vignette>(profile);
             vignette.intensity.overrideState = true;
-            vignette.intensity.value = 0.34f;
+            vignette.intensity.value = 0.26f;
             vignette.smoothness.overrideState = true;
             vignette.smoothness.value = 0.45f;
 
