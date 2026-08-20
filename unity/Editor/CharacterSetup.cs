@@ -155,9 +155,10 @@ namespace Bagisik.EditorTools
 
             var set = new ClipSet
             {
-                idle = Match(all, "idle", "breathing", "stand"),
-                walk = Match(all, "walk"),
-                run = Match(all, "run", "jog", "sprint"),
+                // Sıra önemli: birden fazla idle varsa sakin duruş kazansın.
+                idle = Match(all, "standing idle", "breathing idle", "idle", "stand"),
+                walk = Match(all, "walking", "walk"),
+                run = Match(all, "slow run", "running", "run", "jog", "sprint"),
             };
 
             // Eksik olanı en yakın alternatifle doldur — blend tree boş kalmasın.
@@ -173,15 +174,31 @@ namespace Bagisik.EditorTools
             return set;
         }
 
+        // Dövüş/silah duruşları hikâye sahnesinde yanlış okunur — elenir.
+        private static readonly string[] Unwanted =
+            { "combat", "fight", "boxing", "punch", "kick", "rifle", "pistol", "sword", "aim" };
+
         private static AnimationClip Match(List<AnimationClip> clips, params string[] keywords)
         {
             foreach (string keyword in keywords)
             {
-                var hit = clips.FirstOrDefault(c =>
-                    c.name.ToLowerInvariant().Contains(keyword));
+                // Önce istenmeyenleri elenmiş hâliyle ara, bulunamazsa hepsinde ara.
+                var hit = clips.FirstOrDefault(c => Matches(c, keyword) && !IsUnwanted(c))
+                       ?? clips.FirstOrDefault(c => Matches(c, keyword));
                 if (hit != null) return hit;
             }
             return null;
+        }
+
+        private static bool Matches(AnimationClip clip, string keyword)
+        {
+            return clip.name.ToLowerInvariant().Contains(keyword);
+        }
+
+        private static bool IsUnwanted(AnimationClip clip)
+        {
+            string name = clip.name.ToLowerInvariant();
+            return Unwanted.Any(name.Contains);
         }
 
         private static void MakeLooping(AnimationClip clip)
