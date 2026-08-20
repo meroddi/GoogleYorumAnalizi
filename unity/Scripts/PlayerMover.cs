@@ -99,12 +99,27 @@ namespace Bagisik
             if (animator != null) animator.SetFloat(SpeedHash, NormalizedSpeed, 0.1f, Time.deltaTime);
         }
 
+        /// <summary>
+        /// Girdi kaynakları, öncelik sırasıyla. Hiçbiri bağlanmasa da çalışır —
+        /// ekrandaki On-Screen Stick sanal bir gamepad beslediği için joystick
+        /// kutusunu elle bağlamaya gerek yok.
+        /// </summary>
         private Vector2 ReadInput()
         {
+            // 1) Elle bir Move action bağlandıysa o kazanır.
             if (moveAction != null)
                 return moveAction.action.ReadValue<Vector2>();
 
-            // Editörde klavyeyle test için yedek — mobilde kullanılmaz.
+            // 2) Ekrandaki dokunmatik joystick (OnScreenStick sanal gamepad besler).
+            var pad = Gamepad.current;
+            if (pad != null)
+            {
+                Vector2 stick = pad.leftStick.ReadValue();
+                if (stick.sqrMagnitude > 0.0001f)
+                    return Vector2.ClampMagnitude(stick, 1f);
+            }
+
+            // 3) Editörde klavyeyle test.
             var keyboard = Keyboard.current;
             if (keyboard == null) return Vector2.zero;
 

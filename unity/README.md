@@ -42,6 +42,55 @@ bilmek gerekir — hareket kötüyse hiçbir model onu kurtarmaz.
 
 ---
 
+# ⚡ HIZLI YOL — otomatik kurulum
+
+Aşağıdaki uzun elle-kurulum rehberini okumadan önce şunu bil: **çoğu adım
+otomatik.** `unity/Editor/` içindeki iki script, Unity'nin menüsüne komut ekler.
+
+### 1. Script'leri projeye kopyala
+
+Unity projenin klasöründe PowerShell aç (klasörde boş yere **Shift + sağ tık**
+→ *PowerShell penceresini burada aç*) ve şunu yapıştır:
+
+```powershell
+$base = "https://raw.githubusercontent.com/meroddi/GoogleYorumAnalizi/claude/walking-dead-style-3d-game-ee1m68/unity"
+New-Item -ItemType Directory -Force -Path ".\Assets\Scripts", ".\Assets\Editor" | Out-Null
+"PlayerMover.cs","CameraRig.cs","HotspotTarget.cs","HotspotDetector.cs","FrameRateController.cs" | ForEach-Object {
+  Invoke-WebRequest "$base/Scripts/$_" -OutFile ".\Assets\Scripts\$_"; Write-Host "Scripts/$_"
+}
+"DemoSceneBuilder.cs","ProjectSetup.cs" | ForEach-Object {
+  Invoke-WebRequest "$base/Editor/$_" -OutFile ".\Assets\Editor\$_"; Write-Host "Editor/$_"
+}
+```
+
+> ⚠️ Editor script'leri **`Assets/Editor/`** klasöründe olmak ZORUNDA. Unity o
+> klasördeki kodu editör aracı olarak derler; başka yerde çalışmaz.
+
+### 2. Unity'ye dön, menüden çalıştır
+
+Derleme bitince üst menü çubuğunda **`Bagisik`** diye yeni bir menü belirir:
+
+| Menü | Ne yapar |
+|---|---|
+| **Bagisik → 1 - Proje Ayarlarini Uygula** | Android (IL2CPP, ARM64, Vulkan+GLES3, minSdk 26, yatay) + tüm URP asset'lerini mobil profiline çeker |
+| **Bagisik → 2 - Demo Sahnesini Kur** | Zemin, 4 duvar, engeller, ışık, oyuncu (CharacterController + PlayerMover + HotspotDetector), kamera (CameraRig, hedefi bağlı) ve dokunmatik joystick UI — hepsini doğru değerlerle kurar |
+
+Sırayla ikisini de çalıştır. Konsol ne yapıldığını ve **cihazda neyin
+doğrulanması gerektiğini** yazar — o uyarıları oku.
+
+### 3. Kaydet ve dene
+
+`Ctrl+S` → **Play** → editörde **WASD** ile yürü.
+
+FPS sayacı istersen: `Player` nesnesine `FrameRateController` bileşenini ekle.
+
+---
+
+*Aşağısı elle kurulum rehberi — otomatik yol çalışmazsa ya da her adımın ne
+yaptığını anlamak istersen.*
+
+---
+
 # ADIM 2 — Proje ve script'ler
 
 ### 2.1 Projeyi oluştur
