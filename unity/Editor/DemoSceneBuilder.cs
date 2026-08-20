@@ -126,9 +126,11 @@ namespace Bagisik.EditorTools
 
         private static Light EnsureDirectionalLight()
         {
-            var existing = Object.FindFirstObjectByType<Light>();
-            if (existing != null && existing.type == LightType.Directional)
-                return existing;
+            foreach (var existing in Object.FindObjectsByType<Light>(FindObjectsSortMode.None))
+            {
+                if (existing != null && existing.type == LightType.Directional)
+                    return existing;
+            }
 
             var go = new GameObject("Directional Light");
             Undo.RegisterCreatedObjectUndo(go, "Işık ekle");
@@ -241,7 +243,7 @@ namespace Bagisik.EditorTools
 
         private static void EnsureEventSystem()
         {
-            if (Object.FindFirstObjectByType<EventSystem>() != null) return;
+            if (Object.FindObjectsByType<EventSystem>(FindObjectsSortMode.None).Length > 0) return;
 
             var go = new GameObject("EventSystem", typeof(EventSystem));
             Undo.RegisterCreatedObjectUndo(go, "EventSystem ekle");
