@@ -63,7 +63,7 @@ namespace Bagisik.EditorTools
                 "[Bağışık] Karakter kuruldu.\n" +
                 $"• Karakter: {Path.GetFileName(characterPath)}\n" +
                 $"• Avatara bağlanan animasyon dosyası: {bound}\n" +
-                $"• Klipler — idle: {Name(clips.idle)} · walk: {Name(clips.walk)} · run: {Name(clips.run)}\n" +
+                $"• Klipler — idle: {Where(clips.idle)} · walk: {Where(clips.walk)} · run: {Where(clips.run)}\n" +
                 $"• Animator Controller: {ControllerPath}\n" +
                 (placed
                     ? "• Karakter Player'ın yerine geçti, kapsül gizlendi.\n\nPlay'e bas ve yürü."
@@ -141,16 +141,35 @@ namespace Bagisik.EditorTools
             public AnimationClip run;
         }
 
+        /// <summary>
+        /// Klip + geldiği dosyanın adı. Mixamo klipleri çoğunlukla "mixamo.com"
+        /// diye adlandırır; hangi animasyon olduğunu sadece DOSYA adı söyler.
+        /// </summary>
+        private readonly struct NamedClip
+        {
+            public readonly AnimationClip clip;
+            public readonly string searchText;
+
+            public NamedClip(AnimationClip clip, string filePath)
+            {
+                this.clip = clip;
+                // Hem dosya adı hem klip adı aranabilsin.
+                searchText = (Path.GetFileNameWithoutExtension(filePath) + " " + clip.name)
+                    .ToLowerInvariant();
+            }
+        }
+
         private static ClipSet CollectClips(List<string> modelPaths)
         {
-            var all = new List<AnimationClip>();
+            var all = new List<NamedClip>();
 
             foreach (string path in modelPaths)
             {
                 all.AddRange(AssetDatabase.LoadAllAssetsAtPath(path)
                     .OfType<AnimationClip>()
                     // Unity'nin dahili önizleme klipleri sayılmasın.
-                    .Where(c => !c.name.StartsWith("__preview__")));
+                    .Where(c => !c.name.StartsWith("__preview__"))
+                    .Select(c => new NamedClip(c, path)));
             }
 
             var set = new ClipSet
@@ -162,7 +181,7 @@ namespace Bagisik.EditorTools
             };
 
             // Eksik olanı en yakın alternatifle doldur — blend tree boş kalmasın.
-            if (set.idle == null) set.idle = all.FirstOrDefault();
+            if (set.idle == null) set.idle = all.Select(n => n.clip).FirstOrDefault();
             if (set.walk == null) set.walk = set.run ?? set.idle;
             if (set.run == null) set.run = set.walk;
 
@@ -178,27 +197,23 @@ namespace Bagisik.EditorTools
         private static readonly string[] Unwanted =
             { "combat", "fight", "boxing", "punch", "kick", "rifle", "pistol", "sword", "aim" };
 
-        private static AnimationClip Match(List<AnimationClip> clips, params string[] keywords)
+        private static AnimationClip Match(List<NamedClip> clips, params string[] keywords)
         {
             foreach (string keyword in keywords)
             {
                 // Önce istenmeyenleri elenmiş hâliyle ara, bulunamazsa hepsinde ara.
-                var hit = clips.FirstOrDefault(c => Matches(c, keyword) && !IsUnwanted(c))
-                       ?? clips.FirstOrDefault(c => Matches(c, keyword));
+                var hit = clips.Where(n => n.searchText.Contains(keyword))
+                               .OrderBy(n => IsUnwanted(n) ? 1 : 0)
+                               .Select(n => n.clip)
+                               .FirstOrDefault();
                 if (hit != null) return hit;
             }
             return null;
         }
 
-        private static bool Matches(AnimationClip clip, string keyword)
+        private static bool IsUnwanted(NamedClip named)
         {
-            return clip.name.ToLowerInvariant().Contains(keyword);
-        }
-
-        private static bool IsUnwanted(AnimationClip clip)
-        {
-            string name = clip.name.ToLowerInvariant();
-            return Unwanted.Any(name.Contains);
+            return Unwanted.Any(named.searchText.Contains);
         }
 
         private static void MakeLooping(AnimationClip clip)
@@ -344,7 +359,13 @@ namespace Bagisik.EditorTools
                                        Path.GetFileName(path));
         }
 
-        private static string Name(AnimationClip clip) => clip != null ? clip.name : "yok";
+        /// <summary>Klibin hangi dosyadan geldiğini yazar — klip adları hep aynı olabiliyor.</summary>
+        private static string Where(AnimationClip clip)
+        {
+            if (clip == null) return "yok";
+            string path = AssetDatabase.GetAssetPath(clip);
+            return string.IsNullOrEmpty(path) ? clip.name : Path.GetFileNameWithoutExtension(path);
+        }
 
         private static void Tell(string message)
         {
