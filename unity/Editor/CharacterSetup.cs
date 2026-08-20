@@ -208,18 +208,40 @@ namespace Bagisik.EditorTools
             var controller = AnimatorController.CreateAnimatorControllerAtPath(ControllerPath);
             controller.AddParameter(SpeedParam, AnimatorControllerParameterType.Float);
 
+            // Blend tree elle kuruluyor: CreateBlendTreeInController'ın imzası
+            // Unity sürümleri arasında değişiyor, bu yol her sürümde aynı çalışır.
             // PlayerMover normalize edilmiş hızı (0-1) besliyor:
             // 0 = duruyor, ~0.5 = yürüyor, 1 = koşuyor.
-            var tree = controller.CreateBlendTreeInController("Locomotion", out var state);
-            tree.blendParameter = SpeedParam;
-            tree.blendType = BlendTreeType.Simple1D;
-            tree.useAutomaticThresholds = false;
+            var tree = new BlendTree
+            {
+                name = "Locomotion",
+                blendParameter = SpeedParam,
+                blendType = BlendTreeType.Simple1D,
+                useAutomaticThresholds = false,
+                hideFlags = HideFlags.HideInHierarchy,
+            };
 
-            if (clips.idle != null) tree.AddChild(clips.idle, 0f);
-            if (clips.walk != null) tree.AddChild(clips.walk, 0.5f);
-            if (clips.run != null && clips.run != clips.walk) tree.AddChild(clips.run, 1f);
+            var children = new List<ChildMotion>();
+            void Add(Motion motion, float threshold)
+            {
+                if (motion == null) return;
+                children.Add(new ChildMotion { motion = motion, threshold = threshold, timeScale = 1f });
+            }
 
-            controller.layers[0].stateMachine.defaultState = state;
+            Add(clips.idle, 0f);
+            Add(clips.walk, 0.5f);
+            if (clips.run != clips.walk) Add(clips.run, 1f);
+            tree.children = children.ToArray();
+
+            // Controller'ın alt varlığı olarak kaydet, yoksa sahne yeniden
+            // açıldığında blend tree kaybolur.
+            AssetDatabase.AddObjectToAsset(tree, controller);
+
+            var stateMachine = controller.layers[0].stateMachine;
+            var state = stateMachine.AddState("Locomotion");
+            state.motion = tree;
+            state.writeDefaultValues = false;
+            stateMachine.defaultState = state;
 
             EditorUtility.SetDirty(controller);
             return controller;
