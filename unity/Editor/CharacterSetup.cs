@@ -276,6 +276,8 @@ namespace Bagisik.EditorTools
             var capsuleRenderer = player.GetComponent<MeshRenderer>();
             if (capsuleRenderer != null) capsuleRenderer.enabled = false;
 
+            TonedownCharacterMaterials(instance);
+
             var mover = player.GetComponent<PlayerMover>();
             if (mover != null)
             {
@@ -286,6 +288,34 @@ namespace Bagisik.EditorTools
 
             Selection.activeGameObject = player.gameObject;
             return true;
+        }
+
+        /// <summary>
+        /// Mixamo materyalleri parlak ve doygun gelir; sahnedeki en aydınlık
+        /// nesne karakter olursa kompozisyon bozulur ve palet disiplini kırılır.
+        /// Dokuyu koruyup albedo'yu karartıp matlaştırıyoruz.
+        /// </summary>
+        private static void TonedownCharacterMaterials(GameObject character)
+        {
+            foreach (var renderer in character.GetComponentsInChildren<Renderer>(true))
+            {
+                foreach (var mat in renderer.sharedMaterials)
+                {
+                    if (mat == null) continue;
+
+                    if (mat.HasProperty("_BaseColor"))
+                        mat.SetColor("_BaseColor", new Color(0.52f, 0.5f, 0.47f));
+                    else if (mat.HasProperty("_Color"))
+                        mat.SetColor("_Color", new Color(0.52f, 0.5f, 0.47f));
+
+                    // Parlak ten/kumaş plastik görünümün baş sebebi.
+                    if (mat.HasProperty("_Smoothness")) mat.SetFloat("_Smoothness", 0.12f);
+                    if (mat.HasProperty("_Glossiness")) mat.SetFloat("_Glossiness", 0.12f);
+                    if (mat.HasProperty("_Metallic")) mat.SetFloat("_Metallic", 0f);
+
+                    EditorUtility.SetDirty(mat);
+                }
+            }
         }
 
         // ---------- Yardımcılar ----------

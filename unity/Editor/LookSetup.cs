@@ -103,7 +103,7 @@ namespace Bagisik.EditorTools
                 // Sahnenin gerçek key'i sodyum lambası; sıcak ada onun etrafında
                 // kurulsun diye bu ışık bilinçli olarak silik tutuluyor.
                 light.color = Moonlight;
-                light.intensity = 0.35f;
+                light.intensity = 0.5f;
                 light.transform.rotation = Quaternion.Euler(38f, 150f, 0f);
                 light.shadows = LightShadows.Soft;
                 light.shadowStrength = 0.55f;
@@ -135,7 +135,7 @@ namespace Bagisik.EditorTools
             head.transform.localPosition = new Vector3(0f, 4.5f, 0f);
             head.transform.localScale = Vector3.one * 0.35f;
             head.GetComponent<MeshRenderer>().sharedMaterial =
-                GetOrCreateEmissive("Bagisik_Ampul", Sodium, 1.4f);
+                GetOrCreateEmissive("Bagisik_Ampul", Sodium, 0.85f);
 
             var lightGo = new GameObject("Isik");
             lightGo.transform.SetParent(root.transform, false);
@@ -144,8 +144,11 @@ namespace Bagisik.EditorTools
             var light = lightGo.AddComponent<Light>();
             light.type = LightType.Point;
             light.color = Sodium;
-            light.intensity = 26f;   // sahnenin key'i — sıcak adayı bu kurar
-            light.range = 22f;
+            // Menzil bilinçli olarak kısa: ışık tüm sahneyi yıkarsa "sıcak ada"
+            // diye bir şey kalmaz, sadece turuncu bir oda olur. Havuzun kenarı
+            // görünmeli ki karanlık bir anlam taşısın.
+            light.intensity = 14f;
+            light.range = 11f;
             light.shadows = LightShadows.Soft;
         }
 
