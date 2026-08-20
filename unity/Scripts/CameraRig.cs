@@ -18,11 +18,13 @@ namespace Bagisik
         [SerializeField] private Transform target;
 
         [Tooltip("Ayaklara değil, gövde/omuz hizasına bak.")]
-        [SerializeField] private float lookHeight = 1.35f;
+        [SerializeField] private float lookHeight = 1.1f;
 
         [Header("Konum")]
         [Tooltip("Hedefe göre kamera ofseti (dünya uzayında). Y = yükseklik, Z = geri mesafe.")]
-        [SerializeField] private Vector3 offset = new Vector3(0f, 3.2f, -4.5f);
+        // Sinematik mesafe: karakter kareyi doldurmaz, mekân görünür.
+        // Sanat yönü "küçük figür, büyük mekân" kontrastı istiyor.
+        [SerializeField] private Vector3 offset = new Vector3(0f, 5.5f, -9f);
 
         [Tooltip("Takip yumuşaklığı (saniye). Büyük değer = daha tembel, sinematik kamera.")]
         [SerializeField] private float followSmoothTime = 0.25f;

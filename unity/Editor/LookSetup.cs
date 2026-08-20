@@ -75,16 +75,17 @@ namespace Bagisik.EditorTools
             // Gölgeler siyaha kırpılmayacak: karanlığın içinde hâlâ okunacak
             // detay kalmalı (anayasa §1, kural 2). Ortam ışığı bunun sigortası.
             RenderSettings.ambientMode = AmbientMode.Trilight;
-            RenderSettings.ambientSkyColor = ShadowLight * 1.15f;
-            RenderSettings.ambientEquatorColor = ShadowMid * 1.0f;
-            RenderSettings.ambientGroundColor = ShadowDeep * 0.85f;
+            RenderSettings.ambientSkyColor = ShadowLight * 2.3f;
+            RenderSettings.ambientEquatorColor = ShadowMid * 2.0f;
+            RenderSettings.ambientGroundColor = ShadowDeep * 1.6f;
 
             // Sis her sahnede açık; rengi sahnenin baskın ışığından örneklenir.
             RenderSettings.fog = true;
             RenderSettings.fogMode = FogMode.Linear;
             RenderSettings.fogColor = FogColor;
-            RenderSettings.fogStartDistance = 8f;
-            RenderSettings.fogEndDistance = 45f;
+            // Sis mesafeyi yutsun ama dekoru gizlemesin: yakın plan temiz kalır.
+            RenderSettings.fogStartDistance = 14f;
+            RenderSettings.fogEndDistance = 60f;
 
             foreach (var cam in Object.FindObjectsByType<Camera>(FindObjectsSortMode.None))
             {
@@ -103,7 +104,7 @@ namespace Bagisik.EditorTools
                 // Sahnenin gerçek key'i sodyum lambası; sıcak ada onun etrafında
                 // kurulsun diye bu ışık bilinçli olarak silik tutuluyor.
                 light.color = Moonlight;
-                light.intensity = 0.5f;
+                light.intensity = 0.85f;
                 light.transform.rotation = Quaternion.Euler(38f, 150f, 0f);
                 light.shadows = LightShadows.Soft;
                 light.shadowStrength = 0.55f;
@@ -236,9 +237,9 @@ namespace Bagisik.EditorTools
 
             var grade = GetOrAdd<ColorAdjustments>(profile);
             grade.postExposure.overrideState = true;
-            grade.postExposure.value = -0.15f;
+            grade.postExposure.value = 0.35f;
             grade.contrast.overrideState = true;
-            grade.contrast.value = 12f;
+            grade.contrast.value = 8f;
             grade.saturation.overrideState = true;
             grade.saturation.value = -28f;   // ölü dünya; aksan rengi shader'da muaf tutulacak
 
@@ -250,7 +251,7 @@ namespace Bagisik.EditorTools
 
             var smh = GetOrAdd<ShadowsMidtonesHighlights>(profile);
             smh.shadows.overrideState = true;
-            smh.shadows.value = new Vector4(0.88f, 0.96f, 1.14f, 0.055f); // maviye + hafif kaldır
+            smh.shadows.value = new Vector4(0.88f, 0.96f, 1.14f, 0.11f); // maviye + hafif kaldır
             smh.highlights.overrideState = true;
             smh.highlights.value = new Vector4(1.1f, 1.02f, 0.9f, 0f);   // ışıklar sıcağa
 
