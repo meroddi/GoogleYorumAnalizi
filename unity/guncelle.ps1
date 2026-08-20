@@ -36,8 +36,16 @@ $skip = 0
 foreach ($dir in @("Scripts", "Editor")) {
     $api = "https://api.github.com/repos/$owner/$repo/contents/unity/$dir" + "?ref=$branch"
 
+    # Cache-Control: GitHub CDN'i yeni push'lanan icerigi birkac dakika
+    # eski haliyle servis edebiliyor. Bu basliklar onu atlar.
+    $headers = @{
+        "User-Agent"    = "bagisik-updater"
+        "Cache-Control" = "no-cache"
+        "Pragma"        = "no-cache"
+    }
+
     try {
-        $items = Invoke-RestMethod -Uri $api -Headers @{ "User-Agent" = "bagisik-updater" } -ErrorAction Stop
+        $items = Invoke-RestMethod -Uri "$api&_=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" -Headers $headers -ErrorAction Stop
     }
     catch {
         Write-Host "  HATA: $dir listesi alinamadi - $($_.Exception.Message)" -ForegroundColor Red
@@ -57,7 +65,11 @@ foreach ($dir in @("Scripts", "Editor")) {
             # Ayni icerik zaten varsa dokunma - Unity gereksiz yere derlemesin
             $before = if (Test-Path $dest) { (Get-FileHash $dest -Algorithm SHA1).Hash } else { $null }
 
-            Invoke-WebRequest $item.download_url -OutFile $dest -UseBasicParsing
+            # API'nin raw medya tipi CDN'den degil dogrudan API'den gelir —
+            # yeni push'lanan icerigi aninda verir.
+            $raw = $headers.Clone()
+            $raw["Accept"] = "application/vnd.github.raw"
+            Invoke-WebRequest $item.url -OutFile $dest -UseBasicParsing -Headers $raw
             $after = (Get-FileHash $dest -Algorithm SHA1).Hash
             $kb = [math]::Round((Get-Item $dest).Length / 1KB, 1)
 
