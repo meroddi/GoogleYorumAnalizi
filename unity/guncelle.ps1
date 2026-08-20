@@ -35,7 +35,8 @@ $sets = [ordered]@{
         "ProjectSetup.cs",
         "LookSetup.cs",
         "CharacterSetup.cs",
-        "SetDressing.cs"
+        "SetDressing.cs",
+        "LightBake.cs"
     )
 }
 
