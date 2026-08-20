@@ -86,12 +86,50 @@ Sonra otur ve konuş: bu tempoda 5 lokasyon ne demek, kapsam doğru mu.
 
 ## Başarı ölçütü
 
-Demo şu üçünü aynı anda yaparsa başarılıdır:
+> **Öncelik kararı:** *zaman kısıt değil, kalite tek ölçüt.* Demo bile olsa
+> "çalışıyor" yeterli değil — **iyi görünmesi** gerekiyor. Bu bölüm o karara
+> göre yazıldı.
 
-1. Telefonda **sabit 30 fps**, 15 dakika sonra da
-2. Ekran görüntüsü **sanat anayasasının kontrol listesini geçiyor**
-3. Yürümek ve etkileşmek **iyi hissettiriyor**
+Demo şu dördünü aynı anda yaparsa başarılıdır:
 
-Üçü de olursa: kapsamı büyütmeye karar verebiliriz.
-Biri olmazsa: neyin değişmesi gerektiğini öğrenmiş oluruz — ki demo tam da
-bunun için var.
+1. Telefonda **sabit 30 fps**, 15 dakika ısındıktan sonra da
+2. Ekran görüntüsü **sanat anayasasının sign-off listesini geçiyor**
+   (`docs/SANAT-YONU.md` §8) — istisnasız
+3. Kare, **konsept görselin yanına konduğunda utandırmıyor**. Aynısı olmak
+   zorunda değil; aynı dünyaya ait olmalı.
+4. Yürümek ve etkileşmek **iyi hissettiriyor**
+
+Dördü de olursa: kapsamı büyütmeye karar verebiliriz.
+Biri olmazsa: neyin değişmesi gerektiğini öğrenmiş oluruz — demo tam da bunun için var.
+
+---
+
+## Kalite yükseltme sırası
+
+Demo "çalışır" hâle geldikten sonra, **bitmiş sayılmadan önce** şu dört tur:
+
+### Tur 1 — Dokular
+`ambientCG.com` (CC0, giriş yok): asfalt, beton, paslı metal, ahşap.
+Aynı geometri, gerçek yüzeyler. **En büyük sıçrama, sıfır maliyet.**
+
+### Tur 2 — Pişmiş ışık
+Gerçek zamanlıdan lightmap'e geç. Yumuşak gölge, ışığın yüzeyden yüzeye
+sıçraması, gerçek derinlik. Mobilde ayrıca çok daha ucuz.
+
+### Tur 3 — Gerçek modeller
+İlkel şekiller (kutu/silindir) **yer tutucudur, nihai değil.** Ücretsiz Asset
+Store paketleriyle başla; yetmezse satın al.
+
+### Tur 4 — Referans eşleme
+Konsept kareyi yan yana koy. Post-process, palet, kadraj — sign-off listesi
+geçene kadar döndür. **"Yeterince iyi" yok.**
+
+---
+
+## Kapsam uyarısı — kalite yükseldi, kapsam yükselmedi
+
+Kalite çıtasının yükselmesi, demoya yeni şeyler eklemek anlamına **gelmez.**
+Hâlâ tek mekân, tek karakter, iki hotspot, bir diyalog. Aynı küçük demoyu
+**çok daha iyi** yapıyoruz.
+
+Kapsam şişmesi bu projenin bir numaralı ölüm sebebi olmaya devam ediyor.
