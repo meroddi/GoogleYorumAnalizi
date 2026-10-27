@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import numbers
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import gspread
 import pandas as pd
@@ -31,28 +31,110 @@ class SheetsHatasi(RuntimeError):
 
 
 # ==========================================
+# AYARLAR
+# ==========================================
+HESAP_ANAHTARI = "GSHEETS_SERVICE_ACCOUNT_JSON"
+ADRES_ANAHTARI = "GSHEETS_URL"
+
+
+def _secrets_kokleri() -> Mapping[str, Any]:
+    try:
+        return st.secrets.to_dict()
+    except Exception:
+        return {}
+
+
+def _secrets_yolu(kok: Mapping[str, Any], *yol: str) -> Any:
+    deger: Any = kok
+    for parca in yol:
+        if not isinstance(deger, Mapping) or parca not in deger:
+            return None
+        deger = deger[parca]
+    return deger
+
+
+def _hesap_bilgisi(kok: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    ham = _secrets_yolu(kok, HESAP_ANAHTARI)
+    if isinstance(ham, Mapping):
+        return dict(ham)
+    ham = ham or get_secret(HESAP_ANAHTARI, __file__)
+    if ham:
+        try:
+            return json.loads(ham)
+        except json.JSONDecodeError as e:
+            raise SheetsHatasi(
+                f"{HESAP_ANAHTARI} okunamadı. İndirilen JSON dosyasının tamamı "
+                "''' işaretlerinin arasına, hiç değiştirilmeden yapıştırılmalı."
+            ) from e
+    # Streamlit belgelerindeki diğer yazım şekilleri de kabul edilir.
+    for yol in (("gcp_service_account",), ("connections", "gsheets")):
+        tablo = _secrets_yolu(kok, *yol)
+        if isinstance(tablo, Mapping) and "private_key" in tablo:
+            return dict(tablo)
+    return None
+
+
+def _tablo_adresi(kok: Mapping[str, Any]) -> str:
+    for deger in (
+        get_secret(ADRES_ANAHTARI, __file__),
+        _secrets_yolu(kok, "private_gsheets_url"),
+        _secrets_yolu(kok, "connections", "gsheets", "spreadsheet"),
+    ):
+        if isinstance(deger, str) and deger.strip():
+            return deger.strip()
+    return ""
+
+
+def _eksik_ayar_mesaji(kok: Mapping[str, Any], eksikler: List[str]) -> str:
+    """Değerleri göstermeden, ayarın neden bulunamadığını tahmin eder."""
+    ipuclari = []
+
+    def gez(dugum: Mapping[str, Any], yol: Tuple[str, ...]) -> None:
+        for anahtar, deger in dugum.items():
+            for eksik in eksikler:
+                if str(anahtar).lower() != eksik.lower():
+                    continue
+                if yol:
+                    ipuclari.append(
+                        f"{eksik} satırı [{'.'.join(yol)}] başlığının altında kalmış; "
+                        "bu satırı köşeli parantezli başlıkların ÜSTÜNE taşıyın."
+                    )
+                elif anahtar != eksik:
+                    ipuclari.append(f"'{anahtar}' yazılmış, tam olarak '{eksik}' olmalı.")
+            if isinstance(deger, Mapping):
+                gez(deger, yol + (str(anahtar),))
+
+    gez(kok, ())
+    mesaj = f"Google E-Tablo ayarı bulunamadı: {', '.join(eksikler)}."
+    if ipuclari:
+        return mesaj + " " + " ".join(ipuclari)
+    return mesaj + (
+        " Streamlit Cloud > Settings > Secrets'ta bu adla bir satır olduğundan ve "
+        "'Save changes' ile kaydedildiğinden emin olun."
+    )
+
+
+# ==========================================
 # BAĞLANTI
 # ==========================================
 @st.cache_resource(show_spinner=False)
 def _tablo() -> gspread.Spreadsheet:
-    hesap_json = get_secret("GSHEETS_SERVICE_ACCOUNT_JSON", __file__)
-    tablo_adresi = get_secret("GSHEETS_URL", __file__).strip()
-    if not hesap_json or not tablo_adresi:
-        raise SheetsHatasi(
-            "Google E-Tablo ayarları eksik. Secrets'a GSHEETS_URL ve "
-            "GSHEETS_SERVICE_ACCOUNT_JSON eklenmeli."
-        )
-    try:
-        hesap = json.loads(hesap_json)
-    except json.JSONDecodeError as e:
-        raise SheetsHatasi(
-            "GSHEETS_SERVICE_ACCOUNT_JSON okunamadı. İndirilen JSON dosyasının "
-            "tamamı ''' işaretlerinin arasına yapıştırılmalı."
-        ) from e
+    kok = _secrets_kokleri()
+    hesap = _hesap_bilgisi(kok)
+    tablo_adresi = _tablo_adresi(kok)
+    eksikler = [ad for ad, deger in ((ADRES_ANAHTARI, tablo_adresi), (HESAP_ANAHTARI, hesap)) if not deger]
+    if eksikler:
+        raise SheetsHatasi(_eksik_ayar_mesaji(kok, eksikler))
 
     tablo_id = extract_id_from_url(tablo_adresi) if tablo_adresi.startswith("http") else tablo_adresi
-    istemci = gspread.service_account_from_dict(hesap, scopes=SCOPES)
     robot = hesap.get("client_email", "servis hesabı")
+    try:
+        istemci = gspread.service_account_from_dict(hesap, scopes=SCOPES)
+    except (ValueError, KeyError) as e:
+        raise SheetsHatasi(
+            f"{HESAP_ANAHTARI} eksik ya da bozuk. İndirilen JSON dosyasının tamamını "
+            "kopyaladığınızdan emin olun."
+        ) from e
     try:
         return istemci.open_by_key(tablo_id)
     except (gspread.exceptions.SpreadsheetNotFound, PermissionError) as e:

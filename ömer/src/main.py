@@ -185,6 +185,12 @@ TRIPADVISOR_SUTUNLAR = (
     "author_title", "review_rating", "review_text", "review_datetime_utc", "location_title",
     "title", "tripType", "lang", "platform_total_reviews", "platform_rating", "anahtar",
 )
+# API ile çekilen Google yorumlarının arşivi; analize katılmaz, yalnızca saklanır.
+GOOGLE_API_SAYFA = "Google API Yorumları"
+GOOGLE_API_SUTUNLAR = (
+    "review_datetime_utc", "location_title", "author_title", "review_rating", "review_text",
+    "location_name", "anahtar",
+)
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 TRIPADVISOR_SEED_FILES = ("tripadvisor_seed.xlsx",)
@@ -255,6 +261,12 @@ def _sheets_yazma_hatasi(e: Exception) -> None:
     st.stop()
 
 
+def _tarih_metni(deger) -> str:
+    """Tarihi tabloya her kaynakta aynı biçimde (UTC, saniyeye kadar) yazar."""
+    ts = pd.to_datetime(deger, errors="coerce", utc=True)
+    return "" if pd.isna(ts) else ts.tz_convert(None).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def db_outscraper_kaydet(df: pd.DataFrame) -> int:
     if df is None or df.empty:
         return 0
@@ -271,7 +283,7 @@ def db_outscraper_kaydet(df: pd.DataFrame) -> int:
                 "author_title": row.get("author_title", ""),
                 "review_rating": int(row.get("review_rating", 0)),
                 "review_text": row.get("review_text", ""),
-                "review_datetime_utc": str(row.get("review_datetime_utc", "")),
+                "review_datetime_utc": _tarih_metni(row.get("review_datetime_utc")),
                 "location_title": row.get("location_title", ""),
                 "anahtar": anahtar,
             })
@@ -288,7 +300,7 @@ def db_outscraper_yukle() -> pd.DataFrame:
         df = sheets_db.oku(OUTSCRAPER_SAYFA, OUTSCRAPER_SUTUNLAR).drop(columns="anahtar")
         df["kaynak"] = "outscraper"
         df["review_rating"] = pd.to_numeric(df["review_rating"], errors="coerce").fillna(0).astype(int)
-        df["review_datetime_utc"] = pd.to_datetime(df["review_datetime_utc"], errors="coerce", utc=True).dt.tz_convert(None)
+        df["review_datetime_utc"] = pd.to_datetime(df["review_datetime_utc"], errors="coerce", utc=True, format="mixed").dt.tz_convert(None)
         return df
     except Exception as e:
         _sheets_hatasi_goster(e)
@@ -310,6 +322,40 @@ def db_outscraper_adet() -> int:
         return 0
 
 
+def db_google_api_arsivle(df: pd.DataFrame) -> Optional[int]:
+    """API'den çekilen yorumları arşiv sayfasına ekler. Hata analizi durdurmaz; None döner."""
+    if df is None or df.empty:
+        return 0
+    kayitlar = []
+    for _, row in df.iterrows():
+        tarih = _tarih_metni(row.get("review_datetime_utc"))
+        tesis = str(row.get("location_name") or row.get("location_title") or "").strip()
+        yazar = str(row.get("author_title", "")).lower().strip()
+        # Google yorumun ilk yazıldığı anı değiştirmez; yorum sonradan düzenlense de aynı anahtar kalır.
+        if tarih:
+            anahtar = f"{tesis}|{yazar}|{tarih}"
+        else:
+            metin = str(row.get("review_text", ""))[:80].lower().strip()
+            anahtar = f"{tesis}|{yazar}|{row.get('review_rating', '')}|{metin}"
+        try:
+            kayitlar.append({
+                "review_datetime_utc": tarih,
+                "location_title": row.get("location_title", ""),
+                "author_title": row.get("author_title", ""),
+                "review_rating": int(row.get("review_rating", 0)),
+                "review_text": row.get("review_text", ""),
+                "location_name": row.get("location_name", ""),
+                "anahtar": anahtar,
+            })
+        except Exception:
+            pass
+    try:
+        return sheets_db.ekle(GOOGLE_API_SAYFA, GOOGLE_API_SUTUNLAR, kayitlar)
+    except Exception as e:
+        _sheets_hatasi_goster(e)
+        return None
+
+
 def db_tripadvisor_kaydet(df: pd.DataFrame) -> int:
     if df is None or df.empty:
         return 0
@@ -329,7 +375,7 @@ def db_tripadvisor_kaydet(df: pd.DataFrame) -> int:
                 "author_title": row.get("author_title", ""),
                 "review_rating": int(row.get("review_rating", 0)),
                 "review_text": row.get("review_text", ""),
-                "review_datetime_utc": str(row.get("review_datetime_utc", "")),
+                "review_datetime_utc": _tarih_metni(row.get("review_datetime_utc")),
                 "location_title": row.get("location_title", ""),
                 "title": row.get("title", ""),
                 "tripType": row.get("tripType", ""),
@@ -356,7 +402,7 @@ def db_tripadvisor_yukle() -> pd.DataFrame:
 
         df["kaynak"] = "tripadvisor_db"
         df["review_rating"] = pd.to_numeric(df["review_rating"], errors="coerce")
-        df["review_datetime_utc"] = pd.to_datetime(df["review_datetime_utc"], errors="coerce", utc=True).dt.tz_convert(None)
+        df["review_datetime_utc"] = pd.to_datetime(df["review_datetime_utc"], errors="coerce", utc=True, format="mixed").dt.tz_convert(None)
         df["platform_total_reviews"] = pd.to_numeric(df["platform_total_reviews"], errors="coerce")
         df["platform_rating"] = pd.to_numeric(df["platform_rating"], errors="coerce")
         df = df.dropna(subset=["review_rating", "review_datetime_utc"])
@@ -1622,6 +1668,8 @@ elif platform == "🔵 Google Yorumları":
                     raw_df = fetch_reviews_for_locations(access_token, selected_account_name, selected_locations, parallel=parallel_fetch)
                     if not raw_df.empty:
                         raw_df["kaynak"] = "api"
+                        arsive_eklenen = db_google_api_arsivle(raw_df)
+                        logger.info("google_api_arsiv eklenen=%s", arsive_eklenen)
                         birlesik = api_ile_birlestir(raw_df)
                         st.session_state.data_frame = birlesik
                         st.session_state.data_loaded_at = datetime.now()
