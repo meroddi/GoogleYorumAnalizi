@@ -18,3 +18,6 @@ openpyxl==3.1.5
 # cokme riskini deterministik tutmak icin transitif birakmak yerine, stres-testli
 # ve muhafazakar 18.1.0 dogrudan sabitlendi (streamlit>=7.0, pandas>=10.0.1 uyumlu).
 pyarrow==18.1.0
+# Yorum veritabani: Google E-Tablo (sheets_db.py). Ikisi de saf Python.
+gspread==6.2.1
+google-auth==2.40.3

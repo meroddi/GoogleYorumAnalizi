@@ -1,0 +1,159 @@
+"""Yorumları Google E-Tablo'da saklayan yardımcı.
+
+Her yorum türü tabloda kendi sayfasında durur. İlk satır sütun adlarıdır;
+uygulama sütunları sırasına göre değil adına göre bulur. Tekrar eden yorumlar
+"anahtar" sütunuyla ayıklanır.
+
+Gerekli secrets:
+    GSHEETS_URL                   -> tablonun tarayıcıdaki adresi (veya kimliği)
+    GSHEETS_SERVICE_ACCOUNT_JSON  -> servis hesabı JSON dosyasının tamamı
+"""
+from __future__ import annotations
+
+import json
+import numbers
+from typing import Any, Dict, Iterable, List, Sequence, Tuple
+
+import gspread
+import pandas as pd
+import streamlit as st
+from gspread.utils import InsertDataOption, ValueInputOption, ValueRenderOption, extract_id_from_url
+
+from local_secrets import get_secret
+
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+OKUMA_TTL_SANIYE = 600   # tabloda elle yapılan değişiklikler en geç 10 dakikada görünür
+HUCRE_SINIRI = 50_000    # Google E-Tablo'da bir hücreye sığan en fazla karakter
+
+
+class SheetsHatasi(RuntimeError):
+    """Kullanıcıya olduğu gibi gösterilebilecek Türkçe hata."""
+
+
+# ==========================================
+# BAĞLANTI
+# ==========================================
+@st.cache_resource(show_spinner=False)
+def _tablo() -> gspread.Spreadsheet:
+    hesap_json = get_secret("GSHEETS_SERVICE_ACCOUNT_JSON", __file__)
+    tablo_adresi = get_secret("GSHEETS_URL", __file__).strip()
+    if not hesap_json or not tablo_adresi:
+        raise SheetsHatasi(
+            "Google E-Tablo ayarları eksik. Secrets'a GSHEETS_URL ve "
+            "GSHEETS_SERVICE_ACCOUNT_JSON eklenmeli."
+        )
+    try:
+        hesap = json.loads(hesap_json)
+    except json.JSONDecodeError as e:
+        raise SheetsHatasi(
+            "GSHEETS_SERVICE_ACCOUNT_JSON okunamadı. İndirilen JSON dosyasının "
+            "tamamı ''' işaretlerinin arasına yapıştırılmalı."
+        ) from e
+
+    tablo_id = extract_id_from_url(tablo_adresi) if tablo_adresi.startswith("http") else tablo_adresi
+    istemci = gspread.service_account_from_dict(hesap, scopes=SCOPES)
+    robot = hesap.get("client_email", "servis hesabı")
+    try:
+        return istemci.open_by_key(tablo_id)
+    except (gspread.exceptions.SpreadsheetNotFound, PermissionError) as e:
+        raise SheetsHatasi(
+            f"Tablo açılamadı. Adresin doğru olduğundan ve tablonun {robot} "
+            "adresiyle 'Düzenleyen' olarak paylaşıldığından emin olun."
+        ) from e
+    except gspread.exceptions.APIError as e:
+        raise SheetsHatasi(
+            "Google E-Tablo'ya bağlanılamadı. Google Cloud projesinde "
+            f"'Google Sheets API' açık olmalı. ({e})"
+        ) from e
+
+
+def _sayfa(ad: str, sutunlar: Sequence[str]) -> gspread.Worksheet:
+    tablo = _tablo()
+    try:
+        return tablo.worksheet(ad)
+    except gspread.exceptions.WorksheetNotFound:
+        sayfa = tablo.add_worksheet(title=ad, rows=1000, cols=len(sutunlar))
+        sayfa.update([list(sutunlar)], "A1")
+        sayfa.freeze(rows=1)
+        return sayfa
+
+
+def _sutun_yerleri(ad: str, baslik: List[Any], sutunlar: Sequence[str]) -> Dict[str, int]:
+    baslik = [str(b).strip() for b in baslik]
+    eksik = [s for s in sutunlar if s not in baslik]
+    if eksik:
+        raise SheetsHatasi(
+            f"'{ad}' sayfasında şu sütun başlıkları bulunamadı: {', '.join(eksik)}. "
+            "İlk satırdaki başlıkları değiştirmeyin."
+        )
+    return {s: baslik.index(s) for s in sutunlar}
+
+
+def _hucre(deger: Any) -> Any:
+    if deger is None or (pd.api.types.is_scalar(deger) and pd.isna(deger)):
+        return ""
+    if isinstance(deger, numbers.Integral):
+        return int(deger)
+    if isinstance(deger, numbers.Real):
+        return float(deger)
+    return str(deger)[:HUCRE_SINIRI]
+
+
+# ==========================================
+# OKU / EKLE / TEMİZLE
+# ==========================================
+@st.cache_data(ttl=OKUMA_TTL_SANIYE, show_spinner=False)
+def oku(ad: str, sutunlar: Tuple[str, ...]) -> pd.DataFrame:
+    """Sayfadaki tüm satırları, istenen sütunlarla DataFrame olarak döner."""
+    degerler = _sayfa(ad, sutunlar).get_all_values(value_render_option=ValueRenderOption.unformatted)
+    if not degerler:
+        return pd.DataFrame(columns=list(sutunlar))
+
+    yer = _sutun_yerleri(ad, degerler[0], sutunlar)
+    satirlar = [r for r in degerler[1:] if any(str(v).strip() for v in r)]
+    return pd.DataFrame({
+        s: [r[i] if i < len(r) else "" for r in satirlar]
+        for s, i in yer.items()
+    })
+
+
+def ekle(ad: str, sutunlar: Tuple[str, ...], kayitlar: Iterable[Dict[str, Any]]) -> int:
+    """Anahtarı tabloda olmayan kayıtları tek seferde ekler; eklenen sayısını döner."""
+    sayfa = _sayfa(ad, sutunlar)
+    degerler = sayfa.get_all_values()
+    if not degerler:
+        sayfa.update([list(sutunlar)], "A1")
+        degerler = [list(sutunlar)]
+
+    baslik = [str(b).strip() for b in degerler[0]]
+    k = _sutun_yerleri(ad, baslik, sutunlar)["anahtar"]
+    mevcut = {r[k] for r in degerler[1:] if k < len(r) and r[k]}
+
+    yeni = []
+    for kayit in kayitlar:
+        anahtar = kayit["anahtar"]
+        if anahtar in mevcut:
+            continue
+        mevcut.add(anahtar)
+        yeni.append([_hucre(kayit.get(b, "")) for b in baslik])
+
+    if yeni:
+        # RAW: "=..." ile başlayan yorumlar formül değil düz yazı olarak kalır.
+        # INSERT_ROWS: tabloda boş satır olsa bile alttaki veri ezilmez.
+        sayfa.append_rows(
+            yeni,
+            value_input_option=ValueInputOption.raw,
+            insert_data_option=InsertDataOption.insert_rows,
+            table_range="A1",
+        )
+        oku.clear()
+    return len(yeni)
+
+
+def temizle(ad: str, sutunlar: Tuple[str, ...]) -> None:
+    """Başlık satırı dışındaki her şeyi siler."""
+    sayfa = _sayfa(ad, sutunlar)
+    # Dondurulmuş başlığın altında en az bir satır kalmalı, yoksa Google izin vermez.
+    sayfa.resize(rows=2)
+    sayfa.batch_clear(["2:2"])
+    oku.clear()

@@ -2,7 +2,6 @@ import streamlit as st
 import time
 import hmac
 import hashlib
-import sqlite3
 import os
 import sys
 import logging
@@ -112,6 +111,7 @@ from datetime import datetime, timedelta
 from io import BytesIO
 from typing import Dict, List, Optional, Tuple
 import os
+import sheets_db
 
 st.set_page_config(page_title="Google Yorum Analizi", page_icon="📊", layout="wide")
 _log_mem("app_start")
@@ -174,9 +174,17 @@ def google_kpi_from_place_ids(place_ids: List[str]) -> Tuple[Optional[float], Op
 
 
 # ==========================================
-# VERİTABANI
+# VERİTABANI (Google E-Tablo, bkz. sheets_db.py)
 # ==========================================
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reviews.db")
+OUTSCRAPER_SAYFA = "Google Yorumları"
+OUTSCRAPER_SUTUNLAR = (
+    "author_title", "review_rating", "review_text", "review_datetime_utc", "location_title", "anahtar",
+)
+TRIPADVISOR_SAYFA = "TripAdvisor Yorumları"
+TRIPADVISOR_SUTUNLAR = (
+    "author_title", "review_rating", "review_text", "review_datetime_utc", "location_title",
+    "title", "tripType", "lang", "platform_total_reviews", "platform_rating", "anahtar",
+)
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 TRIPADVISOR_SEED_FILES = ("tripadvisor_seed.xlsx",)
@@ -229,49 +237,28 @@ def render_df_paginated(df: pd.DataFrame, key: str, page_size: int = 250, **kwar
         )
     st.dataframe(df.iloc[start:end], **kwargs)
 
-def db_init():
-    con = sqlite3.connect(DB_PATH)
+_sheets_hatasi_gosterildi = False
 
-    # Google / Outscraper
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS outscraper_reviews (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            author_title TEXT,
-            review_rating INTEGER,
-            review_text TEXT,
-            review_datetime_utc TEXT,
-            location_title TEXT,
-            anahtar TEXT UNIQUE
-        )
-    """)
 
-    # TripAdvisor
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS tripadvisor_reviews (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            author_title TEXT,
-            review_rating INTEGER,
-            review_text TEXT,
-            review_datetime_utc TEXT,
-            location_title TEXT,
-            title TEXT,
-            tripType TEXT,
-            lang TEXT,
-            platform_total_reviews INTEGER,
-            platform_rating REAL,
-            anahtar TEXT UNIQUE
-        )
-    """)
+def _sheets_hatasi_goster(e: Exception) -> None:
+    """Okuma hatasını her çalıştırmada bir kez gösterir; uygulama boş veriyle devam eder."""
+    global _sheets_hatasi_gosterildi
+    logger.warning("Google E-Tablo hatası: %r", e)
+    if not _sheets_hatasi_gosterildi:
+        _sheets_hatasi_gosterildi = True
+        st.error(str(e) if isinstance(e, sheets_db.SheetsHatasi) else f"Google E-Tablo hatası: {e}")
 
-    con.commit()
-    con.close()
+
+def _sheets_yazma_hatasi(e: Exception) -> None:
+    """Yazma hatasında sayfayı durdurur ki mesaj st.rerun ile kaybolmasın."""
+    _sheets_hatasi_goster(e)
+    st.stop()
 
 
 def db_outscraper_kaydet(df: pd.DataFrame) -> int:
     if df is None or df.empty:
         return 0
-    con = sqlite3.connect(DB_PATH)
-    eklenen = 0
+    kayitlar = []
     for _, row in df.iterrows():
         tarih_str = pd.to_datetime(row.get("review_datetime_utc"), errors="coerce")
         tarih_str = tarih_str.strftime("%Y-%m-%d") if not pd.isna(tarih_str) else "?"
@@ -280,54 +267,46 @@ def db_outscraper_kaydet(df: pd.DataFrame) -> int:
         puan    = str(row.get("review_rating", ""))
         anahtar = f"{yazar}|{puan}|{metin}|{tarih_str}"
         try:
-            con.execute("""
-                INSERT OR IGNORE INTO outscraper_reviews
-                (author_title, review_rating, review_text, review_datetime_utc, location_title, anahtar)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                row.get("author_title", ""),
-                int(row.get("review_rating", 0)),
-                row.get("review_text", ""),
-                str(row.get("review_datetime_utc", "")),
-                row.get("location_title", ""),
-                anahtar,
-            ))
-            if con.execute("SELECT changes()").fetchone()[0] > 0:
-                eklenen += 1
+            kayitlar.append({
+                "author_title": row.get("author_title", ""),
+                "review_rating": int(row.get("review_rating", 0)),
+                "review_text": row.get("review_text", ""),
+                "review_datetime_utc": str(row.get("review_datetime_utc", "")),
+                "location_title": row.get("location_title", ""),
+                "anahtar": anahtar,
+            })
         except Exception:
             pass
-    con.commit()
-    con.close()
-    return eklenen
+    try:
+        return sheets_db.ekle(OUTSCRAPER_SAYFA, OUTSCRAPER_SUTUNLAR, kayitlar)
+    except Exception as e:
+        _sheets_yazma_hatasi(e)
 
 
 def db_outscraper_yukle() -> pd.DataFrame:
     try:
-        con = sqlite3.connect(DB_PATH)
-        df = pd.read_sql("SELECT author_title, review_rating, review_text, review_datetime_utc, location_title FROM outscraper_reviews", con)
-        con.close()
+        df = sheets_db.oku(OUTSCRAPER_SAYFA, OUTSCRAPER_SUTUNLAR).drop(columns="anahtar")
         df["kaynak"] = "outscraper"
         df["review_rating"] = pd.to_numeric(df["review_rating"], errors="coerce").fillna(0).astype(int)
         df["review_datetime_utc"] = pd.to_datetime(df["review_datetime_utc"], errors="coerce", utc=True).dt.tz_convert(None)
         return df
-    except Exception:
+    except Exception as e:
+        _sheets_hatasi_goster(e)
         return pd.DataFrame()
 
 
 def db_outscraper_sil():
-    con = sqlite3.connect(DB_PATH)
-    con.execute("DELETE FROM outscraper_reviews")
-    con.commit()
-    con.close()
+    try:
+        sheets_db.temizle(OUTSCRAPER_SAYFA, OUTSCRAPER_SUTUNLAR)
+    except Exception as e:
+        _sheets_yazma_hatasi(e)
 
 
 def db_outscraper_adet() -> int:
     try:
-        con = sqlite3.connect(DB_PATH)
-        adet = con.execute("SELECT COUNT(*) FROM outscraper_reviews").fetchone()[0]
-        con.close()
-        return adet
-    except Exception:
+        return len(sheets_db.oku(OUTSCRAPER_SAYFA, OUTSCRAPER_SUTUNLAR))
+    except Exception as e:
+        _sheets_hatasi_goster(e)
         return 0
 
 
@@ -335,9 +314,7 @@ def db_tripadvisor_kaydet(df: pd.DataFrame) -> int:
     if df is None or df.empty:
         return 0
 
-    con = sqlite3.connect(DB_PATH)
-    eklenen = 0
-
+    kayitlar = []
     for _, row in df.iterrows():
         tarih_str = pd.to_datetime(row.get("review_datetime_utc"), errors="coerce")
         tarih_str = tarih_str.strftime("%Y-%m-%d") if not pd.isna(tarih_str) else "?"
@@ -348,55 +325,31 @@ def db_tripadvisor_kaydet(df: pd.DataFrame) -> int:
         anahtar = f"{tesis}|{yazar}|{puan}|{metin}|{tarih_str}"
 
         try:
-            con.execute("""
-                INSERT OR IGNORE INTO tripadvisor_reviews
-                (
-                    author_title, review_rating, review_text, review_datetime_utc,
-                    location_title, title, tripType, lang,
-                    platform_total_reviews, platform_rating, anahtar
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                row.get("author_title", ""),
-                int(row.get("review_rating", 0)),
-                row.get("review_text", ""),
-                str(row.get("review_datetime_utc", "")),
-                row.get("location_title", ""),
-                row.get("title", ""),
-                row.get("tripType", ""),
-                row.get("lang", ""),
-                int(row.get("platform_total_reviews")) if pd.notna(row.get("platform_total_reviews")) else None,
-                float(row.get("platform_rating")) if pd.notna(row.get("platform_rating")) else None,
-                anahtar
-            ))
-            if con.execute("SELECT changes()").fetchone()[0] > 0:
-                eklenen += 1
+            kayitlar.append({
+                "author_title": row.get("author_title", ""),
+                "review_rating": int(row.get("review_rating", 0)),
+                "review_text": row.get("review_text", ""),
+                "review_datetime_utc": str(row.get("review_datetime_utc", "")),
+                "location_title": row.get("location_title", ""),
+                "title": row.get("title", ""),
+                "tripType": row.get("tripType", ""),
+                "lang": row.get("lang", ""),
+                "platform_total_reviews": int(row.get("platform_total_reviews")) if pd.notna(row.get("platform_total_reviews")) else None,
+                "platform_rating": float(row.get("platform_rating")) if pd.notna(row.get("platform_rating")) else None,
+                "anahtar": anahtar,
+            })
         except Exception:
             pass
 
-    con.commit()
-    con.close()
-    return eklenen
+    try:
+        return sheets_db.ekle(TRIPADVISOR_SAYFA, TRIPADVISOR_SUTUNLAR, kayitlar)
+    except Exception as e:
+        _sheets_yazma_hatasi(e)
 
 
 def db_tripadvisor_yukle() -> pd.DataFrame:
     try:
-        con = sqlite3.connect(DB_PATH)
-        df = pd.read_sql("""
-            SELECT
-                author_title,
-                review_rating,
-                review_text,
-                review_datetime_utc,
-                location_title,
-                title,
-                tripType,
-                lang,
-                platform_total_reviews,
-                platform_rating
-            FROM tripadvisor_reviews
-        """, con)
-        con.close()
+        df = sheets_db.oku(TRIPADVISOR_SAYFA, TRIPADVISOR_SUTUNLAR).drop(columns="anahtar")
 
         if df.empty:
             return df
@@ -412,28 +365,26 @@ def db_tripadvisor_yukle() -> pd.DataFrame:
         df = df.sort_values("review_datetime_utc", ascending=False, na_position="last").reset_index(drop=True)
         return df
 
-    except Exception:
+    except Exception as e:
+        _sheets_hatasi_goster(e)
         return pd.DataFrame()
 
 
 def db_tripadvisor_sil():
-    con = sqlite3.connect(DB_PATH)
-    con.execute("DELETE FROM tripadvisor_reviews")
-    con.commit()
-    con.close()
+    try:
+        sheets_db.temizle(TRIPADVISOR_SAYFA, TRIPADVISOR_SUTUNLAR)
+    except Exception as e:
+        _sheets_yazma_hatasi(e)
+    # Eskisi gibi: temizledikten sonra varsa hazır (seed) dosya yeniden yüklenir.
+    _tripadvisor_seed_bir_kez.clear()
 
 
 def db_tripadvisor_adet() -> int:
     try:
-        con = sqlite3.connect(DB_PATH)
-        adet = con.execute("SELECT COUNT(*) FROM tripadvisor_reviews").fetchone()[0]
-        con.close()
-        return adet
-    except Exception:
+        return len(sheets_db.oku(TRIPADVISOR_SAYFA, TRIPADVISOR_SUTUNLAR))
+    except Exception as e:
+        _sheets_hatasi_goster(e)
         return 0
-
-
-db_init()
 
 
 def dosya_isle(uploaded_file) -> pd.DataFrame:
@@ -1243,7 +1194,13 @@ def db_tripadvisor_seed_yukle() -> int:
     return eklenen_toplam
 
 
-db_tripadvisor_seed_yukle()
+@st.cache_resource(show_spinner=False)
+def _tripadvisor_seed_bir_kez() -> int:
+    """Hazır TripAdvisor dosyasını her tıklamada değil, sunucu açılışında bir kez yükler."""
+    return db_tripadvisor_seed_yukle()
+
+
+_tripadvisor_seed_bir_kez()
 
 
 def ta_performans_alani(df: pd.DataFrame):
