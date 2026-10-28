@@ -160,15 +160,18 @@ def _sayfa(ad: str, sutunlar: Sequence[str]) -> gspread.Worksheet:
         return sayfa
 
 
-def _sutun_yerleri(ad: str, baslik: List[Any], sutunlar: Sequence[str]) -> Dict[str, int]:
+def _sutun_yerleri(
+    ad: str, baslik: List[Any], sutunlar: Sequence[str], istege_bagli: Sequence[str] = ()
+) -> Dict[str, int]:
+    """Sütunların yerini adına göre bulur; isteğe bağlı olup tabloda olmayanlar -1 döner."""
     baslik = [str(b).strip() for b in baslik]
-    eksik = [s for s in sutunlar if s not in baslik]
+    eksik = [s for s in sutunlar if s not in baslik and s not in istege_bagli]
     if eksik:
         raise SheetsHatasi(
             f"'{ad}' sayfasında şu sütun başlıkları bulunamadı: {', '.join(eksik)}. "
             "İlk satırdaki başlıkları değiştirmeyin."
         )
-    return {s: baslik.index(s) for s in sutunlar}
+    return {s: baslik.index(s) if s in baslik else -1 for s in sutunlar}
 
 
 def _hucre(deger: Any) -> Any:
@@ -185,18 +188,35 @@ def _hucre(deger: Any) -> Any:
 # OKU / EKLE / TEMİZLE
 # ==========================================
 @st.cache_data(ttl=OKUMA_TTL_SANIYE, show_spinner=False)
-def oku(ad: str, sutunlar: Tuple[str, ...]) -> pd.DataFrame:
-    """Sayfadaki tüm satırları, istenen sütunlarla DataFrame olarak döner."""
+def oku(ad: str, sutunlar: Tuple[str, ...], istege_bagli: Tuple[str, ...] = ()) -> pd.DataFrame:
+    """Sayfadaki tüm satırları, istenen sütunlarla DataFrame olarak döner.
+
+    `istege_bagli` sütunlar eski sayfalarda henüz yoksa boş gelir.
+    """
     degerler = _sayfa(ad, sutunlar).get_all_values(value_render_option=ValueRenderOption.unformatted)
     if not degerler:
         return pd.DataFrame(columns=list(sutunlar))
 
-    yer = _sutun_yerleri(ad, degerler[0], sutunlar)
+    yer = _sutun_yerleri(ad, degerler[0], sutunlar, istege_bagli)
     satirlar = [r for r in degerler[1:] if any(str(v).strip() for v in r)]
     return pd.DataFrame({
-        s: [r[i] if i < len(r) else "" for r in satirlar]
+        s: [r[i] if 0 <= i < len(r) else "" for r in satirlar]
         for s, i in yer.items()
     })
+
+
+def yaz_tumu(ad: str, sutunlar: Tuple[str, ...], kayitlar: Iterable[Dict[str, Any]]) -> None:
+    """Sayfayı başlık ve verilen kayıtlarla baştan yazar (eksik sütunlar da böylece eklenir)."""
+    sayfa = _sayfa(ad, sutunlar)
+    degerler = [list(sutunlar)] + [[_hucre(k.get(s, "")) for s in sutunlar] for k in kayitlar]
+    eski_satir = sayfa.row_count
+    if sayfa.row_count < len(degerler) or sayfa.col_count < len(sutunlar):
+        sayfa.resize(rows=max(sayfa.row_count, len(degerler)), cols=max(sayfa.col_count, len(sutunlar)))
+    # Önce üzerine yazılır, sonra artan eski satırlar temizlenir: yarıda kalırsa veri kaybolmaz.
+    sayfa.update(degerler, "A1")
+    if eski_satir > len(degerler):
+        sayfa.batch_clear([f"{len(degerler) + 1}:{eski_satir}"])
+    oku.clear()
 
 
 def ekle(ad: str, sutunlar: Tuple[str, ...], kayitlar: Iterable[Dict[str, Any]]) -> int:
