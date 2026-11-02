@@ -201,6 +201,9 @@ TRIPADVISOR_YUKLEME_SUTUNLAR = (
 # bu özellikten önceki sayfalarda yoktur.
 TRIPADVISOR_YUKLEME_ISTEGE_BAGLI = ("kapsam_disi", "kapsam_baslangic")
 TA_ESKI_KAYITLAR = "Önceki kayıtlar"
+# Yarım çekim sayılması için dosyanın en eski gününden eski, eksik yorum sayısının alt sınırı. Gerçek kesik
+# çekimlerde 10–128 yorum birden eksikti; daha azı en eski yorumların gerçekten silinmesi sayılır.
+TA_YARIM_ESIK = 5
 # API ile çekilen Google yorumlarının arşivi; analize katılmaz, yalnızca saklanır.
 GOOGLE_API_SAYFA = "Google API Yorumları"
 GOOGLE_API_SUTUNLAR = (
@@ -506,11 +509,14 @@ def db_tripadvisor_yukleme_kaydet(df: pd.DataFrame, dosya_adi: str) -> Optional[
         def gun(kayit):
             return pd.to_datetime(kayit.get("review_datetime_utc"), errors="coerce").normalize()
 
-        # Dosya, bir önceki yüklemedeki en eski yoruma kadar inmemişse yarımdır.
+        # Dosya bir önceki yüklemedeki en eski yoruma kadar inmemiş ve ondan eski çok sayıda yorum eksikse
+        # yarımdır (çekim kesilmiş). Eksik eski yorum birkaç taneyse en eskiler gerçekten silinmiş sayılır.
         dosya_ilk_gun = pd.to_datetime(df["review_datetime_utc"], errors="coerce").min().normalize()
         onceki_gunler = [gun(k) for k in arsiv.to_dict("records") if k.get("son_yukleme") == onceki_id]
         onceki_ilk_gun = min((g for g in onceki_gunler if not pd.isna(g)), default=pd.NaT)
-        yarim = not pd.isna(dosya_ilk_gun) and not pd.isna(onceki_ilk_gun) and dosya_ilk_gun > onceki_ilk_gun
+        eski_eksik = sum(1 for g in onceki_gunler if not pd.isna(g) and g < dosya_ilk_gun)
+        yarim = (not pd.isna(dosya_ilk_gun) and not pd.isna(onceki_ilk_gun) and dosya_ilk_gun > onceki_ilk_gun
+                 and eski_eksik >= TA_YARIM_ESIK)
 
         satirlar, silinenler = [], []
         gorulen, eslesen = set(), set()
@@ -552,17 +558,19 @@ def db_tripadvisor_yukleme_kaydet(df: pd.DataFrame, dosya_adi: str) -> Optional[
         for kayit in yeni_kayitlar.values():
             satirlar.append({**kayit, "ilk_yukleme": yukleme_id, "onceki_gorulme": "", "son_yukleme": yukleme_id})
 
-        sheets_db.yaz_tumu(TRIPADVISOR_SAYFA, TRIPADVISOR_SUTUNLAR, satirlar)
         ozet = {
             "yukleme_id": yukleme_id, "dosya_adi": dosya_adi,
             "yorum_sayisi": sum(1 for s in satirlar if s["son_yukleme"] == yukleme_id),
             "yeni": len(yeni_kayitlar) + geri_gelen, "silinen": silinen, "anahtar": yukleme_id,
             "kapsam_disi": kapsam_disi, "kapsam_baslangic": dosya_ilk_gun.strftime("%Y-%m-%d") if yarim else "",
         }
+        guncel = {s["anahtar"] for s in satirlar if s["son_yukleme"] == yukleme_id}
+        # Önce silinen arşivi yazılır: sonraki yazımlardan biri hata verirse dosya yeniden yüklenince silinenler
+        # yine bulunur (arşive ikinci kez eklenmez). Ters sırada yükleme kaydedilip arşiv yazılamazsa kaybolurlardı.
+        _ta_silinen_arsivi_guncelle(silinenler, guncel, onceki, ozet)
+        sheets_db.yaz_tumu(TRIPADVISOR_SAYFA, TRIPADVISOR_SUTUNLAR, satirlar)
         # Baştan yazılır ki yeni sütunlar eski sayfaya da eklensin.
         sheets_db.yaz_tumu(TRIPADVISOR_YUKLEME_SAYFA, TRIPADVISOR_YUKLEME_SUTUNLAR, yukleme_satirlari + [ozet])
-        guncel = {s["anahtar"] for s in satirlar if s["son_yukleme"] == yukleme_id}
-        _ta_silinen_arsivi_guncelle(silinenler, guncel, onceki, ozet)
         logger.info("tripadvisor_yukleme onceki=%s guncel=%s yeni=%s silinen=%s kapsam_disi=%s",
                     onceki_sayi, ozet["yorum_sayisi"], ozet["yeni"], silinen, kapsam_disi)
         return ozet
@@ -1690,10 +1698,18 @@ def _ta_silinen_dosyadan(icerik: bytes):
     return df, bilgi, kontrol, tuttu
 
 
+def _ta_silinen_yukleyici_anahtari() -> str:
+    """Kayıttan sonra numara artar: yükleme alanı boşalır ve ekran önizleme yerine güncel arşivi gösterir."""
+    return f"ta_silinen_uploader_{st.session_state.get('ta_silinen_yukleme_no', 0)}"
+
+
 def ta_silinen_goster(son_yukleme: Optional[dict] = None):
     st.subheader("Silinen Yorumlar")
+    mesaj = st.session_state.pop("ta_silinen_mesaj", None)
+    if mesaj:
+        st.success(mesaj)
     # Yükleme alanı görünümün altında; seçilen dosya kaydedilmeden önce burada önizlenir.
-    dosya = st.session_state.get("ta_silinen_uploader")
+    dosya = st.session_state.get(_ta_silinen_yukleyici_anahtari())
     onizleme, hata = None, None
     if dosya is not None:
         try:
@@ -1791,7 +1807,7 @@ def _ta_silinen_analiz(df: pd.DataFrame, kaynak: str, referans: str):
 
 def _ta_silinen_yukleme(onizleme, hata: Optional[str], acik: bool):
     with st.expander("Silinen yorum dosyası yükle veya güncelle (.json)", expanded=acik or bool(onizleme or hata)):
-        st.file_uploader("Silinen yorum dosyası (.json)", type=["json"], key="ta_silinen_uploader")
+        st.file_uploader("Silinen yorum dosyası (.json)", type=["json"], key=_ta_silinen_yukleyici_anahtari())
         if hata:
             st.error(hata)
             return
@@ -1818,7 +1834,10 @@ def _ta_silinen_yukleme(onizleme, hata: Optional[str], acik: bool):
         if st.button("Silinen yorum arşivine kaydet", type="primary", disabled=not tuttu, key="ta_silinen_kaydet"):
             with st.spinner("Silinen yorumlar arşive kaydediliyor..."):
                 toplam = db_ta_silinen_kaydet(df[~gorunen])
-            st.success(f"Arşive kaydedildi. Arşivde {toplam} silinen yorum var.")
+            # Önizleme kalkar, ekran güncel arşivi gösterir; mesaj yeniden çizimde gösterilir.
+            st.session_state["ta_silinen_mesaj"] = f"Arşive kaydedildi. Arşivde {toplam} silinen yorum var."
+            st.session_state["ta_silinen_yukleme_no"] = st.session_state.get("ta_silinen_yukleme_no", 0) + 1
+            st.rerun()
         st.caption(
             f"Ayrı “{TA_SILINEN_SAYFA}” sayfasına yazılır; normal yorumlara eklenmez. "
             "Aynı dosya tekrar kaydedilirse yorumlar çoğalmaz."
