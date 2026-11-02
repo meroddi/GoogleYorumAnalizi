@@ -10,7 +10,7 @@ import json
 import re
 from html import escape
 from io import BytesIO
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -25,13 +25,23 @@ _ZORUNLU = ("review_id", "review_rating", "review_datetime_utc", "review_text")
 _TIPLI = ("review_rating", "review_datetime_utc", "is_machine_translated")
 _AYLAR = ("Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
           "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık")
+_CEKIM_ZAMANI = re.compile(r"_(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-")
+_KIMLIK_ANAHTARI = r"\d*\|\d+"  # "işletme|yorum" kimliği; eski yüklemelerden gelen anahtarlar başka biçimde
 
 
-def cekim_etiketi(dosya_adi: Any) -> str:
-    """'dataset_..._2026-10-02_06-28-29-596.xlsx' -> '02.10.2026 06:28'; tanınmayan ad olduğu gibi döner."""
+def cekim_etiketi(dosya_adi: Any, yedek: Optional[str] = None) -> str:
+    """'dataset_..._2026-10-02_06-28-29-596.xlsx' -> '02.10.2026 06:28'; tanınmayan adda `yedek`, o da yoksa ad."""
     metin = _metin(dosya_adi)
-    m = re.search(r"_(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-", metin)
-    return f"{m[3]}.{m[2]}.{m[1]} {m[4]}:{m[5]}" if m else metin
+    m = _CEKIM_ZAMANI.search(metin)
+    if m:
+        return f"{m[3]}.{m[2]}.{m[1]} {m[4]}:{m[5]}"
+    return metin if yedek is None else yedek
+
+
+def cekim_tarihi(dosya_adi: Any) -> str:
+    """Dosya adındaki çekim günü ('2026-10-02'); yoksa boş."""
+    m = _CEKIM_ZAMANI.search(_metin(dosya_adi))
+    return f"{m[1]}-{m[2]}-{m[3]}" if m else ""
 
 
 def ay_adi(tarih) -> str:
@@ -163,13 +173,22 @@ def kontroller(df: pd.DataFrame, bilgi: Dict[str, Any]) -> Tuple[pd.DataFrame, b
     return pd.DataFrame(tablo), hepsi_tuttu
 
 
-def referans_metni(df: pd.DataFrame) -> str:
-    """'2 Kasım 2026 son çekimi (02.11.2026 05:18)'; bilgi yoksa boş."""
-    if df.empty:
+def referans_metni(df: pd.DataFrame, son_yukleme: Optional[Tuple[str, str]] = None) -> str:
+    """'2 Kasım 2026 son çekimi (02.11.2026 05:18)'; bilgi yoksa boş.
+
+    Arşivdeki en yeni referans kullanılır; `son_yukleme` (gün, çekim adı) daha yeniyse o, çünkü
+    her yükleme arşivi günceller: listede o yüklemede bulunmayan yorumlar kalır.
+    """
+    adaylar = []
+    if not df.empty:
+        son = df.sort_values("referans_tarihi").iloc[-1]
+        adaylar.append((son["referans_tarihi"], son["referans_cekim"]))
+    if son_yukleme and son_yukleme[0]:
+        adaylar.append(son_yukleme)
+    if not adaylar:
         return ""
-    son = df.sort_values("referans_tarihi").iloc[-1]
-    tarih = pd.to_datetime(son["referans_tarihi"], errors="coerce")
-    cekim = son["referans_cekim"]
+    gun, cekim = max(adaylar, key=lambda a: str(a[0]))
+    tarih = pd.to_datetime(gun, errors="coerce")
     metin = "son çekim" if pd.isna(tarih) else f"{tarih.day} {ay_adi(tarih)} son çekimi"
     return f"{metin} ({cekim})" if cekim else metin
 
@@ -227,10 +246,58 @@ def excel_raporu(puan_tablosu: pd.DataFrame, liste: pd.DataFrame, bilgi_satirlar
     return cikti.getvalue()
 
 
+def yuklemeden_kayit(kayit: Dict[str, Any], son_gorulen: str, ilk_eksik: str, referans_tarihi: str) -> Dict[str, Any]:
+    """Normal yükleme karşılaştırmasında silinen bulunan satırı arşiv satırına çevirir."""
+    anahtar = _metin(kayit.get("anahtar"))
+    kimlik = re.fullmatch(r"(\d*)\|(\d+)", anahtar)
+    yazar = _metin(kayit.get("author_title"))
+    return {
+        "anahtar": anahtar,
+        "review_id": kimlik[2] if kimlik else "",
+        "location_id": kimlik[1] if kimlik else "",
+        "location_title": kayit.get("location_title"),
+        "author_title": "" if yazar.lower() == "misafir" else yazar,  # yükleme, yazarsız yoruma "Misafir" yazar
+        "review_rating": kayit.get("review_rating"),
+        "review_datetime_utc": kayit.get("review_datetime_utc"),
+        "title": kayit.get("title"),
+        "review_text": kayit.get("review_text"),
+        "review_url": kayit.get("review_url"),
+        "lang": kayit.get("lang"),
+        "original_language": kayit.get("original_language"),
+        "is_machine_translated": kayit.get("is_machine_translated"),
+        "tripType": kayit.get("tripType"),
+        "son_gorulen_cekim": son_gorulen,
+        "ilk_eksik_cekim": ilk_eksik,
+        "referans_cekim": ilk_eksik,
+        "referans_tarihi": referans_tarihi,
+    }
+
+
+def _gevsek_anahtarlar(r: pd.Series) -> List[str]:
+    """Kimliksiz bir kaydı aynı yorumun kimlikli kaydıyla eşleştirmek için: metin+puan, yazar+puan+gün."""
+    anahtarlar = []
+    metin = r["review_text"][:80].lower()
+    if metin:
+        anahtarlar.append(f"metin|{r['review_rating']}|{metin}")
+    yazar = r["author_title"].lower()
+    if yazar:
+        anahtarlar.append(f"yazar|{yazar}|{r['review_rating']}|{r['review_datetime_utc']:%Y-%m-%d}")
+    return anahtarlar
+
+
 def arsiv_kayitlari(mevcut: pd.DataFrame, yeni: pd.DataFrame) -> List[Dict[str, Any]]:
     """Arşivdekilerle yenileri anahtara göre birleştirir; aynı yorum güncellenir, çoğalmaz."""
-    parcalar = [hazirla(mevcut)] if mevcut is not None and not mevcut.empty else []
-    birlesik = pd.concat(parcalar + [hazirla(yeni)], ignore_index=True).drop_duplicates("anahtar", keep="last")
+    parcalar = [hazirla(d) for d in (mevcut, yeni) if d is not None and not d.empty]
+    if not parcalar:
+        return []
+    birlesik = pd.concat(parcalar, ignore_index=True).drop_duplicates("anahtar", keep="last")
+    # Kimlik eşleştirmesinden önceki yüklemeden gelen kimliksiz kayıt, aynı yorumun kimlikli kaydı varsa atılır;
+    # böylece doğrulanmış dosya ile yükleme hangi sırada gelirse gelsin yorum iki kez görünmez.
+    kimlikli = birlesik["anahtar"].str.fullmatch(_KIMLIK_ANAHTARI)
+    if (~kimlikli).any():
+        bilinen = {g for _, r in birlesik[kimlikli].iterrows() for g in _gevsek_anahtarlar(r)}
+        yinelenen = birlesik[~kimlikli].apply(lambda r: any(g in bilinen for g in _gevsek_anahtarlar(r)), axis=1)
+        birlesik = birlesik.drop(yinelenen[yinelenen].index)
     birlesik = birlesik.sort_values(["review_datetime_utc", "review_id"], ascending=[False, True])
     kayitlar = []
     for r in birlesik.to_dict("records"):

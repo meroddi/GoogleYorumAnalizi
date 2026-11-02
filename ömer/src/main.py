@@ -186,11 +186,13 @@ TRIPADVISOR_SAYFA = "TripAdvisor Yorumları"
 TRIPADVISOR_SUTUNLAR = (
     "author_title", "review_rating", "review_text", "review_datetime_utc", "location_title",
     "title", "tripType", "lang", "platform_total_reviews", "platform_rating", "anahtar",
-    "ilk_yukleme", "onceki_gorulme", "son_yukleme",
+    "ilk_yukleme", "onceki_gorulme", "son_yukleme", "review_url", "is_machine_translated", "original_language",
 )
-# Her yorumun ilk görüldüğü, bir önceki görüldüğü ve son görüldüğü yükleme;
-# bu özellikten önceki sayfalarda yoktur.
-TRIPADVISOR_ISTEGE_BAGLI = ("ilk_yukleme", "onceki_gorulme", "son_yukleme")
+# Her yorumun ilk görüldüğü, bir önceki görüldüğü ve son görüldüğü yükleme; ayrıca silinen yorum
+# arşivi için bağlantı ve çeviri bilgisi. Bu özelliklerden önceki sayfalarda yoktur.
+TRIPADVISOR_ISTEGE_BAGLI = (
+    "ilk_yukleme", "onceki_gorulme", "son_yukleme", "review_url", "is_machine_translated", "original_language",
+)
 TRIPADVISOR_YUKLEME_SAYFA = "TripAdvisor Yüklemeleri"
 TRIPADVISOR_YUKLEME_SUTUNLAR = (
     "yukleme_id", "dosya_adi", "yorum_sayisi", "yeni", "silinen", "anahtar", "kapsam_disi", "kapsam_baslangic",
@@ -436,6 +438,11 @@ def _ta_kayit(row, anahtar: str) -> dict:
         "platform_total_reviews": int(row.get("platform_total_reviews")) if pd.notna(row.get("platform_total_reviews")) else None,
         "platform_rating": float(row.get("platform_rating")) if pd.notna(row.get("platform_rating")) else None,
         "anahtar": anahtar,
+        "review_url": row.get("review_url", ""),
+        "is_machine_translated": {"true": "TRUE", "false": "FALSE"}.get(
+            str(row.get("is_machine_translated", "")).strip().lower(), ""
+        ),
+        "original_language": row.get("original_language", ""),
     }
 
 
@@ -479,7 +486,8 @@ def db_tripadvisor_yukleme_kaydet(df: pd.DataFrame, dosya_adi: str) -> Optional[
                 "yukleme_id": TA_ESKI_KAYITLAR, "dosya_adi": "", "yorum_sayisi": len(arsiv),
                 "yeni": len(arsiv), "silinen": 0, "anahtar": TA_ESKI_KAYITLAR,
             })
-        onceki_id = yukleme_satirlari[-1]["yukleme_id"] if yukleme_satirlari else None
+        onceki = yukleme_satirlari[-1] if yukleme_satirlari else None
+        onceki_id = onceki["yukleme_id"] if onceki else None
 
         yeni_kayitlar: Dict[str, dict] = {}
         # Kimliksiz eski kayıtları kimlikli yeni kayda bağlamak için; iki yoruma çıkan anahtar kullanılmaz.
@@ -504,7 +512,7 @@ def db_tripadvisor_yukleme_kaydet(df: pd.DataFrame, dosya_adi: str) -> Optional[
         onceki_ilk_gun = min((g for g in onceki_gunler if not pd.isna(g)), default=pd.NaT)
         yarim = not pd.isna(dosya_ilk_gun) and not pd.isna(onceki_ilk_gun) and dosya_ilk_gun > onceki_ilk_gun
 
-        satirlar = []
+        satirlar, silinenler = [], []
         gorulen, eslesen = set(), set()
         onceki_sayi = silinen = geri_gelen = kapsam_disi = 0
         for kayit in arsiv.to_dict("records"):
@@ -537,6 +545,8 @@ def db_tripadvisor_yukleme_kaydet(df: pd.DataFrame, dosya_adi: str) -> Optional[
             else:
                 satir = kayit
                 silinen += onceki_dosyada
+                if onceki_dosyada:
+                    silinenler.append(kayit)
             satirlar.append(satir)
 
         for kayit in yeni_kayitlar.values():
@@ -551,6 +561,8 @@ def db_tripadvisor_yukleme_kaydet(df: pd.DataFrame, dosya_adi: str) -> Optional[
         }
         # Baştan yazılır ki yeni sütunlar eski sayfaya da eklensin.
         sheets_db.yaz_tumu(TRIPADVISOR_YUKLEME_SAYFA, TRIPADVISOR_YUKLEME_SUTUNLAR, yukleme_satirlari + [ozet])
+        guncel = {s["anahtar"] for s in satirlar if s["son_yukleme"] == yukleme_id}
+        _ta_silinen_arsivi_guncelle(silinenler, guncel, onceki, ozet)
         logger.info("tripadvisor_yukleme onceki=%s guncel=%s yeni=%s silinen=%s kapsam_disi=%s",
                     onceki_sayi, ozet["yorum_sayisi"], ozet["yeni"], silinen, kapsam_disi)
         return ozet
@@ -632,6 +644,43 @@ def db_ta_silinen_arsiv() -> pd.DataFrame:
         _sheets_hatasi_goster(e)
         return pd.DataFrame()
     return silinen_yorumlar.hazirla(df) if not df.empty else pd.DataFrame()
+
+
+def _ta_guncel_anahtarlar() -> set:
+    """Son yüklemede görünen yorumların anahtarları; yükleme kaydı yoksa boş."""
+    try:
+        arsiv = _ta_tablodan()
+        yuklemeler = _ta_yuklemeler() if not arsiv.empty else pd.DataFrame()
+    except Exception as e:
+        _sheets_hatasi_goster(e)
+        return set()
+    if yuklemeler.empty:
+        return set()
+    return set(arsiv.loc[arsiv["son_yukleme"] == yuklemeler["yukleme_id"].iloc[-1], "anahtar"])
+
+
+def _ta_yukleme_referansi(yukleme: Optional[dict]) -> Optional[Tuple[str, str]]:
+    """Yüklemenin (gün, çekim adı) bilgisi: dosya adındaki çekim zamanı, yoksa yükleme zamanı."""
+    if not yukleme:
+        return None
+    yukleme_id = str(yukleme["yukleme_id"])
+    gun = silinen_yorumlar.cekim_tarihi(yukleme.get("dosya_adi"))
+    if not gun and re.fullmatch(r"\d{4}-\d{2}-\d{2}", yukleme_id[:10]):
+        gun = yukleme_id[:10]
+    return gun, silinen_yorumlar.cekim_etiketi(yukleme.get("dosya_adi"), yedek=_yukleme_zamani(yukleme_id))
+
+
+def _ta_silinen_arsivi_guncelle(silinenler: List[dict], guncel: set, onceki: Optional[dict], yukleme: dict) -> None:
+    """Yüklemede silinen bulunanları silinen yorum arşivine ekler, yeniden görünenleri arşivden çıkarır."""
+    mevcut = sheets_db.oku_varsa(TA_SILINEN_SAYFA, silinen_yorumlar.ARSIV_SUTUNLARI)
+    geri_gelen = mevcut["anahtar"].isin(guncel)
+    if not silinenler and not geri_gelen.any():
+        return  # arşivde değişiklik yok, tabloya yazılmaz
+    son_gorulen = _ta_yukleme_referansi(onceki)[1] if onceki else ""
+    tarih, ilk_eksik = _ta_yukleme_referansi(yukleme)
+    yeni = pd.DataFrame([silinen_yorumlar.yuklemeden_kayit(k, son_gorulen, ilk_eksik, tarih) for k in silinenler])
+    kayitlar = silinen_yorumlar.arsiv_kayitlari(mevcut[~geri_gelen], yeni)
+    sheets_db.yaz_tumu(TA_SILINEN_SAYFA, silinen_yorumlar.ARSIV_SUTUNLARI, kayitlar)
 
 
 def db_ta_silinen_kaydet(df: pd.DataFrame) -> int:
@@ -1433,6 +1482,11 @@ def ta_isle(uploaded_file) -> pd.DataFrame:
     konum_col = _first_existing_col(df, ["locationId", "placeInfo/id"])
     if konum_col:
         out["location_id"] = df[konum_col].map(_kimlik_metni)
+    # Silinen yorum arşivi için: yorumun bağlantısı ve metnin makine çevirisi olup olmadığı.
+    for kaynak, hedef in (("url", "review_url"), ("isMachineTranslated", "is_machine_translated"),
+                          ("originalLanguage", "original_language")):
+        if kaynak in df.columns:
+            out[hedef] = df[kaynak]
 
     out = out.dropna(subset=["review_rating", "review_datetime_utc"])
     out = out[(out["review_rating"] >= 1) & (out["review_rating"] <= 5)].copy()
@@ -1573,7 +1627,7 @@ def ta_yukleme_ozeti_goster(degisiklik: dict):
             rozetler += f'<span class="ta-ozet__rozet ta-ozet__rozet--yeni">+{gelen} yeni</span>'
         if giden:
             rozetler += f'<span class="ta-ozet__rozet ta-ozet__rozet--silinen">−{giden} silinen</span>'
-            detay.append("Silinen yorumlar TripAdvisor'dan kaldırılmış olabilir.")
+            detay.append("Silinen yorumlar TripAdvisor'dan kaldırılmış olabilir; listesi Silinen Yorumlar görünümünde.")
         if not gelen and not giden:
             rozetler = '<span class="ta-ozet__rozet">Değişiklik yok</span>'
         korunan = int(son.get("kapsam_disi") or 0)
@@ -1636,7 +1690,7 @@ def _ta_silinen_dosyadan(icerik: bytes):
     return df, bilgi, kontrol, tuttu
 
 
-def ta_silinen_goster():
+def ta_silinen_goster(son_yukleme: Optional[dict] = None):
     st.subheader("Silinen Yorumlar")
     # Yükleme alanı görünümün altında; seçilen dosya kaydedilmeden önce burada önizlenir.
     dosya = st.session_state.get("ta_silinen_uploader")
@@ -1650,17 +1704,25 @@ def ta_silinen_goster():
 
     if df.empty:
         st.info(
-            "Silinen yorum arşivi henüz boş. Doğrulanmış silinen yorum dosyasını (.json) aşağıdan yükleyin; "
-            "dosya önce önizlenir, arşive kaydetmek ayrı bir adımdır."
+            "Silinen yorum arşivi henüz boş. Yeni TripAdvisor dosyası yüklendikçe silinen yorumlar buraya eklenir. "
+            "Doğrulanmış silinen yorum dosyasını (.json) da aşağıdan yükleyebilirsiniz; dosya önce önizlenir, "
+            "arşive kaydetmek ayrı bir adımdır."
         )
     else:
-        _ta_silinen_analiz(df, "yüklenen dosya (önizleme, henüz kaydedilmedi)" if onizleme else "silinen yorum arşivi")
+        if onizleme:
+            referans = silinen_yorumlar.referans_metni(df)
+            kaynak = "yüklenen dosya (önizleme, henüz kaydedilmedi)"
+        else:
+            # Her yükleme arşivi günceller; son yükleme daha yeniyse referans odur.
+            referans = silinen_yorumlar.referans_metni(df, _ta_yukleme_referansi(son_yukleme))
+            kaynak = "silinen yorum arşivi"
+        _ta_silinen_analiz(df, kaynak, referans)
     _ta_silinen_yukleme(onizleme, hata, acik=df.empty)
 
 
-def _ta_silinen_analiz(df: pd.DataFrame, kaynak: str):
+def _ta_silinen_analiz(df: pd.DataFrame, kaynak: str, referans: str):
     st.caption(
-        f"Referans: {silinen_yorumlar.referans_metni(df)}. Bu çekimde bulunmayan, önceki çekimlerde görülen yorumlar. "
+        f"Referans: {referans}. Bu çekimde bulunmayan, önceki çekimlerde görülen yorumlar. "
         "Tablo yorumun yayın tarihine göre gruplanır; kaldırılma nedeni ve kesin zamanı bilinmiyor."
     )
     puan = df["review_rating"]
@@ -1710,7 +1772,7 @@ def _ta_silinen_analiz(df: pd.DataFrame, kaynak: str):
         st.markdown("".join(silinen_yorumlar.kart_html(r) for _, r in kartlar.iterrows()), unsafe_allow_html=True)
 
     bilgi = [
-        ("Referans", silinen_yorumlar.referans_metni(df)),
+        ("Referans", referans),
         ("Tanım", "Önceki çekimlerde görülüp referans çekimde bulunmayan yorumlar. "
                   "Kaldırılma nedeni ve kesin zamanı bilinmiyor."),
         ("Gruplama", f"{zaman_modu} (yorumun yayın tarihine göre)"),
@@ -1750,9 +1812,12 @@ def _ta_silinen_yukleme(onizleme, hata: Optional[str], acik: bool):
             st.success("Kontroller tamam. Yukarıdaki analiz bu önizlemeyle gösteriliyor.")
         else:
             st.warning("Bazı kontroller tutmuyor; dosyayı kontrol edin. Arşive kaydetme kapalı.")
+        gorunen = df["anahtar"].isin(_ta_guncel_anahtarlar())
+        if gorunen.any():
+            st.info(f"{int(gorunen.sum())} yorum son yüklemede göründüğü için arşive eklenmeyecek; geri gelmiş demektir.")
         if st.button("Silinen yorum arşivine kaydet", type="primary", disabled=not tuttu, key="ta_silinen_kaydet"):
             with st.spinner("Silinen yorumlar arşive kaydediliyor..."):
-                toplam = db_ta_silinen_kaydet(df)
+                toplam = db_ta_silinen_kaydet(df[~gorunen])
             st.success(f"Arşive kaydedildi. Arşivde {toplam} silinen yorum var.")
         st.caption(
             f"Ayrı “{TA_SILINEN_SAYFA}” sayfasına yazılır; normal yorumlara eklenmez. "
@@ -1853,7 +1918,7 @@ def ta_analiz_goster(df: pd.DataFrame, degisiklik: Optional[dict] = None):
 
     elif view == "🗑️ Silinen Yorumlar":
         # Silinen yorumların kendi tablosu ve raporu var; aşağıdaki normal rapor burada gösterilmez.
-        ta_silinen_goster()
+        ta_silinen_goster(degisiklik.get("son") if degisiklik else None)
         return
 
     else:  # "📋 Veri Listesi"
