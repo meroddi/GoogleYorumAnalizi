@@ -110,25 +110,6 @@ section[data-testid="stSidebar"] [data-baseweb="select"] * {
   overflow-wrap: anywhere;
 }
 
-/* ---------- TripAdvisor silinen yorum kartları ---------- */
-.ta-silinen-kart {
-  padding: 10px 0 12px;
-  border-bottom: 1px solid rgba(128, 128, 128, 0.2);
-}
-.ta-silinen-kart:last-child { border-bottom: none; }
-.ta-silinen-kart__baslik { font-weight: 600; }
-.ta-silinen-kart__detay {
-  margin-top: 2px;
-  font-size: 0.8125rem;
-  opacity: 0.7;
-  overflow-wrap: anywhere;
-}
-.ta-silinen-kart__metin {
-  margin-top: 6px;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-
 /* ---------- Section title badges ---------- */
 .section-title-row {
   display: flex;

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import re
-from html import escape
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -208,31 +207,6 @@ def liste_tablosu(df: pd.DataFrame) -> pd.DataFrame:
         "Yorum ID": df["review_id"],
         "Bağlantı": df["review_url"],
     }).reset_index(drop=True)
-
-
-def kart_html(satir: pd.Series) -> str:
-    """'Tam metinleri oku' kartı; yorum kaçışlanır ve olduğu gibi gösterilir (çevrilmez, kısaltılmaz)."""
-    dil = satir["original_language"] or satir["lang"]
-    ceviri = f"Makine çevirisi (orijinal dil: {dil})" if satir["is_machine_translated"] else f"Orijinal metin ({dil})"
-    detay = " · ".join([
-        satir["review_datetime_utc"].strftime("%d.%m.%Y"),
-        satir["author_title"] or BILINMEYEN_YAZAR,
-        f"{satir['review_rating']} yıldız",
-        ceviri,
-    ])
-    cekim = escape(f"Son görüldüğü çekim {satir['son_gorulen_cekim']} · İlk eksik çekim {satir['ilk_eksik_cekim']}")
-    if satir["review_url"].startswith("https://"):
-        cekim += f' · <a href="{escape(satir["review_url"])}" target="_blank">TripAdvisor\'da aç</a>'
-    # Boş satır kalmasın: Streamlit'te HTML bloğu boş satırda biter, kalan metin markdown sayılır.
-    metin = escape(satir["review_text"].replace("\r\n", "\n")).replace("\n", "<br>")
-    return (
-        '<div class="ta-silinen-kart">'
-        f'<div class="ta-silinen-kart__baslik">{escape(satir["title"])}</div>'
-        f'<div class="ta-silinen-kart__detay">{escape(detay)}</div>'
-        f'<div class="ta-silinen-kart__metin">{metin}</div>'
-        f'<div class="ta-silinen-kart__detay">{cekim}</div>'
-        "</div>"
-    )
 
 
 def excel_raporu(puan_tablosu: pd.DataFrame, liste: pd.DataFrame, bilgi_satirlari: List[Tuple[str, Any]]) -> bytes:

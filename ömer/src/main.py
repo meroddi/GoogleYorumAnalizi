@@ -1783,10 +1783,6 @@ def _ta_silinen_analiz(df: pd.DataFrame, kaynak: str, referans: str):
         liste, key="ta_silinen_liste", width="stretch", hide_index=True,
         column_config={"Bağlantı": st.column_config.LinkColumn("Bağlantı", display_text="Aç")},
     )
-    with st.expander(f"Tam metinleri oku ({len(secili)})", expanded=True):
-        kartlar = secili.sort_values(["review_datetime_utc", "review_id"], ascending=[False, True])
-        st.markdown("".join(silinen_yorumlar.kart_html(r) for _, r in kartlar.iterrows()), unsafe_allow_html=True)
-
     bilgi = [
         ("Referans", referans),
         ("Tanım", "Önceki çekimlerde görülüp referans çekimde bulunmayan yorumlar. "
