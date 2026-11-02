@@ -205,6 +205,27 @@ def oku(ad: str, sutunlar: Tuple[str, ...], istege_bagli: Tuple[str, ...] = ()) 
     })
 
 
+@st.cache_data(ttl=OKUMA_TTL_SANIYE, show_spinner=False)
+def _sayfa_var(ad: str) -> bool:
+    try:
+        _tablo().worksheet(ad)
+    except gspread.exceptions.WorksheetNotFound:
+        return False
+    return True
+
+
+def oku_varsa(ad: str, sutunlar: Tuple[str, ...]) -> pd.DataFrame:
+    """`oku` gibi; sayfa henüz yoksa oluşturmadan boş döner (yalnız okumak tabloya yazmasın)."""
+    if not _sayfa_var(ad):
+        return pd.DataFrame(columns=list(sutunlar))
+    return oku(ad, sutunlar)
+
+
+def _onbellegi_temizle() -> None:
+    oku.clear()
+    _sayfa_var.clear()
+
+
 def yaz_tumu(ad: str, sutunlar: Tuple[str, ...], kayitlar: Iterable[Dict[str, Any]]) -> None:
     """Sayfayı başlık ve verilen kayıtlarla baştan yazar (eksik sütunlar da böylece eklenir)."""
     sayfa = _sayfa(ad, sutunlar)
@@ -216,7 +237,7 @@ def yaz_tumu(ad: str, sutunlar: Tuple[str, ...], kayitlar: Iterable[Dict[str, An
     sayfa.update(degerler, "A1")
     if eski_satir > len(degerler):
         sayfa.batch_clear([f"{len(degerler) + 1}:{eski_satir}"])
-    oku.clear()
+    _onbellegi_temizle()
 
 
 def ekle(ad: str, sutunlar: Tuple[str, ...], kayitlar: Iterable[Dict[str, Any]]) -> int:
@@ -248,7 +269,7 @@ def ekle(ad: str, sutunlar: Tuple[str, ...], kayitlar: Iterable[Dict[str, Any]])
             insert_data_option=InsertDataOption.insert_rows,
             table_range="A1",
         )
-        oku.clear()
+        _onbellegi_temizle()
     return len(yeni)
 
 
@@ -258,4 +279,4 @@ def temizle(ad: str, sutunlar: Tuple[str, ...]) -> None:
     # Dondurulmuş başlığın altında en az bir satır kalmalı, yoksa Google izin vermez.
     sayfa.resize(rows=2)
     sayfa.batch_clear(["2:2"])
-    oku.clear()
+    _onbellegi_temizle()

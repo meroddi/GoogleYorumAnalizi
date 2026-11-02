@@ -80,6 +80,55 @@ section[data-testid="stSidebar"] [data-baseweb="select"] * {
   color: #0f172a !important;
 }
 
+/* ---------- TripAdvisor son yükleme özeti ---------- */
+.ta-ozet {
+  background: rgba(128, 128, 128, 0.1);
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 0.875rem;
+}
+.ta-ozet__satir {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+}
+.ta-ozet strong { font-weight: 600; }
+.ta-ozet__rozet {
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  background: rgba(128, 128, 128, 0.15);
+}
+.ta-ozet__rozet--yeni { color: #177233; background: #E3F6E9; }
+.ta-ozet__rozet--silinen { color: #A3241F; background: #FDE8E8; }
+.ta-ozet__detay {
+  margin-top: 4px;
+  font-size: 0.8125rem;
+  opacity: 0.7;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- TripAdvisor silinen yorum kartları ---------- */
+.ta-silinen-kart {
+  padding: 10px 0 12px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.2);
+}
+.ta-silinen-kart:last-child { border-bottom: none; }
+.ta-silinen-kart__baslik { font-weight: 600; }
+.ta-silinen-kart__detay {
+  margin-top: 2px;
+  font-size: 0.8125rem;
+  opacity: 0.7;
+  overflow-wrap: anywhere;
+}
+.ta-silinen-kart__metin {
+  margin-top: 6px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 /* ---------- Section title badges ---------- */
 .section-title-row {
   display: flex;
