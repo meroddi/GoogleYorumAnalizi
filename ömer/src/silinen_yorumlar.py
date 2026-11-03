@@ -209,6 +209,32 @@ def liste_tablosu(df: pd.DataFrame) -> pd.DataFrame:
     }).reset_index(drop=True)
 
 
+def karsilastirma_tablosu(guncel: pd.DataFrame, silinen: pd.DataFrame, donemler: List[str]) -> pd.DataFrame:
+    """Silinen yorumlar şu anki yorumlara geri eklenseydi her dönemin ortalaması ne olurdu.
+
+    İki tablo da analiz_et'in ham verisidir ("Zaman" ve "review_rating"). Satırlar silinen yorum olan dönemler,
+    GENEL TOPLAM aynı aralıktaki bütün yorumlar. Fark ekrandaki yuvarlanmış ortalamalardan hesaplanır.
+    """
+    if "Zaman" not in guncel.columns:  # Seçilen aralıkta şu anki yorum yoksa analiz_et "Zaman" eklemez.
+        guncel = pd.DataFrame({"Zaman": pd.Series(dtype=str), "review_rating": pd.Series(dtype=float)})
+    satirlar = []
+    for zaman in list(donemler) + ["GENEL TOPLAM"]:
+        g = guncel["review_rating"] if zaman == "GENEL TOPLAM" else guncel.loc[guncel["Zaman"] == zaman, "review_rating"]
+        s = silinen["review_rating"] if zaman == "GENEL TOPLAM" else silinen.loc[silinen["Zaman"] == zaman, "review_rating"]
+        su_an = round(float(g.mean()), 2) if len(g) else float("nan")
+        silinmeseydi = round(float(pd.concat([g, s]).mean()), 2)
+        satirlar.append({
+            "Zaman": zaman,
+            "Şu anki yorum": len(g),
+            "Şu anki ort.": su_an,
+            "Silinen yorum": len(s),
+            "Silinmeseydi yorum": len(g) + len(s),
+            "Silinmeseydi ort.": silinmeseydi,
+            "Fark": round(silinmeseydi - su_an, 2) + 0.0,  # + 0.0: -0.0 "0.00" görünsün.
+        })
+    return pd.DataFrame(satirlar).set_index("Zaman")
+
+
 def excel_raporu(puan_tablosu: pd.DataFrame, liste: pd.DataFrame, bilgi_satirlari: List[Tuple[str, Any]]) -> bytes:
     """Seçilen kapsamın raporu: Bilgi, Puan_Analizi ve Silinen_Yorumlar sayfaları."""
     cikti = BytesIO()

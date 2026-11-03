@@ -1703,7 +1703,7 @@ def _ta_silinen_yukleyici_anahtari() -> str:
     return f"ta_silinen_uploader_{st.session_state.get('ta_silinen_yukleme_no', 0)}"
 
 
-def ta_silinen_goster(son_yukleme: Optional[dict] = None):
+def ta_silinen_goster(son_yukleme: Optional[dict] = None, guncel: Optional[pd.DataFrame] = None):
     st.subheader("Silinen Yorumlar")
     mesaj = st.session_state.pop("ta_silinen_mesaj", None)
     if mesaj:
@@ -1732,11 +1732,34 @@ def ta_silinen_goster(son_yukleme: Optional[dict] = None):
             # Her yükleme arşivi günceller; son yükleme daha yeniyse referans odur.
             referans = silinen_yorumlar.referans_metni(df, _ta_yukleme_referansi(son_yukleme))
             kaynak = "silinen yorum arşivi"
-        _ta_silinen_analiz(df, kaynak, referans)
+        _ta_silinen_analiz(df, kaynak, referans, guncel)
     _ta_silinen_yukleme(onizleme, hata, acik=df.empty)
 
 
-def _ta_silinen_analiz(df: pd.DataFrame, kaynak: str, referans: str):
+def _ta_fark_rengi(fark: str) -> str:
+    if fark.startswith("+"):
+        return "color: #1A7F37"
+    return "color: #C4161C" if fark.startswith("-") else ""
+
+
+def _ta_ortalama_metni(ortalama) -> str:
+    return "—" if pd.isna(ortalama) else f"{ortalama:.2f}"
+
+
+def _ta_silinmeseydi_tablosu(guncel: pd.DataFrame, silinen_ham: pd.DataFrame, donemler: List[str],
+                             zaman_modu: str, date_range):
+    """Silinen yorumlar şu anki yorumlarla birlikte sayılsaydı ortalama ne olurdu; aynı zaman seçimiyle."""
+    _, guncel_ham = analiz_et(guncel, zaman_modu, date_range=date_range)
+    tablo = silinen_yorumlar.karsilastirma_tablosu(guncel_ham, silinen_ham, donemler)
+    # Boş hücre Streamlit'te "None" görünür; ortalamalar ve fark "—" ile metin olarak gösterilir.
+    tablo["Şu anki ort."] = tablo["Şu anki ort."].map(_ta_ortalama_metni)
+    tablo["Silinmeseydi ort."] = tablo["Silinmeseydi ort."].map(_ta_ortalama_metni)
+    tablo["Fark"] = tablo["Fark"].map(lambda f: "—" if pd.isna(f) else f"+{f:.2f}" if f > 0 else f"{f:.2f}")
+    sutunlar = {c: st.column_config.TextColumn(c, alignment="right") for c in ("Şu anki ort.", "Silinmeseydi ort.", "Fark")}
+    st.dataframe(tablo.style.map(_ta_fark_rengi, subset=["Fark"]), width="stretch", column_config=sutunlar)
+
+
+def _ta_silinen_analiz(df: pd.DataFrame, kaynak: str, referans: str, guncel: Optional[pd.DataFrame] = None):
     st.caption(
         f"Referans: {referans}. Bu çekimde bulunmayan, önceki çekimlerde görülen yorumlar. "
         "Tablo yorumun yayın tarihine göre gruplanır; kaldırılma nedeni ve kesin zamanı bilinmiyor."
@@ -1763,6 +1786,10 @@ def _ta_silinen_analiz(df: pd.DataFrame, kaynak: str, referans: str):
         f"{zaman_modu} Silinen Yorum Tablosu", "tripadvisor-logo-cropped.png", "tripadvisor-logo.png"
     )
     st.dataframe(puan_tablosu, width="stretch")
+    if guncel is not None and not guncel.empty:
+        _ta_silinmeseydi_tablosu(
+            guncel, ham_veri, [z for z in puan_tablosu.index if z != "GENEL TOPLAM"], zaman_modu, date_range
+        )
 
     tumu = "Tüm dönemler"
     sayilar = puan_tablosu["TOPLAM YORUM"]
@@ -1933,7 +1960,7 @@ def ta_analiz_goster(df: pd.DataFrame, degisiklik: Optional[dict] = None):
 
     elif view == "🗑️ Silinen Yorumlar":
         # Silinen yorumların kendi tablosu ve raporu var; aşağıdaki normal rapor burada gösterilmez.
-        ta_silinen_goster(degisiklik.get("son") if degisiklik else None)
+        ta_silinen_goster(degisiklik.get("son") if degisiklik else None, guncel=df)
         return
 
     else:  # "📋 Veri Listesi"
